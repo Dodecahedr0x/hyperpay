@@ -1,0 +1,71 @@
+{
+  "name": "@magicblock-labs/hyperpay-react",
+  "version": "0.1.0",
+  "description": "React hooks and components for HyperPay fast payments.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./provider": {
+      "types": "./dist/provider.d.ts",
+      "import": "./dist/provider.js"
+    },
+    "./hooks": {
+      "types": "./dist/hooks.d.ts",
+      "import": "./dist/hooks.js"
+    },
+    "./wallet": {
+      "types": "./dist/wallet.d.ts",
+      "import": "./dist/wallet.js"
+    },
+    "./components": {
+      "types": "./dist/components/index.d.ts",
+      "import": "./dist/components/index.js"
+    },
+    "./components/PayButton": {
+      "types": "./dist/components/PayButton.d.ts",
+      "import": "./dist/components/PayButton.js"
+    },
+    "./components/PayModal": {
+      "types": "./dist/components/PayModal.d.ts",
+      "import": "./dist/components/PayModal.js"
+    },
+    "./components/PaymentStatus": {
+      "types": "./dist/components/PaymentStatus.d.ts",
+      "import": "./dist/components/PaymentStatus.js"
+    },
+    "./styles": {
+      "types": "./dist/styles.d.ts",
+      "import": "./dist/styles.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "react": ">=18",
+    "react-dom": ">=18"
+  },
+  "dependencies": {
+    "@magicblock-labs/hyperpay-core": "0.1.0",
+    "@magicblock-labs/hyperpay-solana": "0.1.0",
+    "@magicblock-labs/hyperpay-types": "0.1.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5"
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "name": "@magicblock-labs/hyperpay-solana",
+  "version": "0.1.0",
+  "description": "On-chain helpers for HyperPay: signers, ATA, submit/confirm.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/magicblock-labs/hyperpay.git",
+    "directory": "packages/solana"
+  },
+  "bugs": {
+    "url": "https://github.com/magicblock-labs/hyperpay/issues"
+  },
+  "homepage": "https://github.com/magicblock-labs/hyperpay/tree/main/packages/solana#readme",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./ata": {
+      "types": "./dist/ata.d.ts",
+      "import": "./dist/ata.js",
+      "default": "./dist/ata.js"
+    },
+    "./engine": {
+      "types": "./dist/engine.d.ts",
+      "import": "./dist/engine.js",
+      "default": "./dist/engine.js"
+    },
+    "./signer": {
+      "types": "./dist/signer.d.ts",
+      "import": "./dist/signer.js",
+      "default": "./dist/signer.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@magicblock-labs/hyperpay-types": "*",
+    "@solana/web3.js": "^1.98.0",
+    "tweetnacl": "^1.0.3"
+  }
+}

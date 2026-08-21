@@ -1,0 +1,36 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"],
+    "paths": {
+      "@magicblock-labs/hyperpay": ["./packages/hyperpay/src/index.ts"],
+      "@magicblock-labs/hyperpay/types": ["./packages/hyperpay/src/types.ts"],
+      "@magicblock-labs/hyperpay/solana": ["./packages/hyperpay/src/solana.ts"],
+      "@magicblock-labs/hyperpay/core": ["./packages/hyperpay/src/core.ts"],
+      "@magicblock-labs/hyperpay/x402": ["./packages/hyperpay/src/x402.ts"],
+      "@magicblock-labs/hyperpay/react": ["./packages/hyperpay/src/react.ts"],
+      "@magicblock-labs/hyperpay/mcp": ["./packages/hyperpay/src/mcp.ts"],
+      "@magicblock-labs/hyperpay-core": ["./packages/core/src/index.ts"],
+      "@magicblock-labs/hyperpay-core/api": ["./packages/core/src/api.ts"],
+      "@magicblock-labs/hyperpay-core/client": ["./packages/core/src/client.ts"],
+      "@magicblock-labs/hyperpay-core/policy": ["./packages/core/src/policy.ts"],
+      "@magicblock-labs/hyperpay-core/signer": ["./packages/core/src/signer-node.ts"],
+      "@magicblock-labs/hyperpay-solana": ["./packages/solana/src/index.ts"],
+      "@magicblock-labs/hyperpay-solana/ata": ["./packages/solana/src/ata.ts"],
+      "@magicblock-labs/hyperpay-solana/engine": ["./packages/solana/src/engine.ts"],
+      "@magicblock-labs/hyperpay-solana/signer": ["./packages/solana/src/signer.ts"],
+      "@magicblock-labs/hyperpay-types": ["./packages/types/src/index.ts"],
+      "@magicblock-labs/hyperpay-types/amounts": ["./packages/types/src/amounts.ts"],
+      "@magicblock-labs/hyperpay-types/errors": ["./packages/types/src/errors.ts"],
+      "@magicblock-labs/hyperpay-types/api": ["./packages/types/src/api.ts"],
+      "@magicblock-labs/hyperpay-x402": ["./packages/x402/src/index.ts"],
+      "@magicblock-labs/hyperpay-react": ["./packages/react/src/index.ts"],
+      "@magicblock-labs/hyperpay-react/provider": ["./packages/react/src/provider.tsx"],
+      "@magicblock-labs/hyperpay-react/hooks": ["./packages/react/src/hooks.ts"],
+      "@magicblock-labs/hyperpay-react/wallet": ["./packages/react/src/wallet.ts"],
+      "@magicblock-labs/hyperpay-react/components": ["./packages/react/src/components/index.ts"]
+    }
+  },
+  "include": ["packages/*/src", "packages/react/test", "test"]
+}

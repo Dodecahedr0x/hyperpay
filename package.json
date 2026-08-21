@@ -1,0 +1,44 @@
+{
+  "name": "hyperpay-monorepo",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/magicblock-labs/hyperpay.git"
+  },
+  "bugs": {
+    "url": "https://github.com/magicblock-labs/hyperpay/issues"
+  },
+  "homepage": "https://github.com/magicblock-labs/hyperpay#readme",
+  "workspaces": [
+    "packages/*",
+    "examples/react"
+  ],
+  "scripts": {
+    "build": "npm run build -w @magicblock-labs/hyperpay-types && npm run build -w @magicblock-labs/hyperpay-solana && npm run build -w @magicblock-labs/hyperpay-core && npm run build -w @magicblock-labs/hyperpay-x402 && npm run build -w @magicblock-labs/hyperpay-react && npm run build -w @magicblock-labs/hyperpay",
+    "test": "vitest run test/unit packages/react/test",
+    "test:dist": "vitest run --config vitest.dist.config.ts",
+    "test:live": "vitest run test/live --testTimeout=120000",
+    "test:e2e": "vitest run test/e2e --testTimeout=300000",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "publish:packages": "npm publish -ws --access public"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "@testing-library/react": "^16.2.0",
+    "@types/node": "^22.20.1",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "jsdom": "^26.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8",
+    "zod": "^4.4.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

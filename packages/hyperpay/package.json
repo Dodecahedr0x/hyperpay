@@ -1,0 +1,114 @@
+{
+  "name": "@magicblock-labs/hyperpay",
+  "version": "0.1.0",
+  "description": "The easiest way to pay on Solana. Private, instant, agent-ready — built on MagicBlock ephemeral rollups and eSPL.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": [
+    "./dist/node.js",
+    "./src/node.ts"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/magicblock-labs/hyperpay.git",
+    "directory": "packages/hyperpay"
+  },
+  "bugs": {
+    "url": "https://github.com/magicblock-labs/hyperpay/issues"
+  },
+  "homepage": "https://github.com/magicblock-labs/hyperpay#readme",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "hyperpay": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": {
+        "node": "./dist/node.js",
+        "browser": "./dist/index.js",
+        "default": "./dist/index.js"
+      },
+      "default": {
+        "node": "./dist/node.js",
+        "browser": "./dist/index.js",
+        "default": "./dist/index.js"
+      }
+    },
+    "./types": {
+      "types": "./dist/types.d.ts",
+      "import": "./dist/types.js",
+      "default": "./dist/types.js"
+    },
+    "./solana": {
+      "types": "./dist/solana.d.ts",
+      "import": "./dist/solana.js",
+      "default": "./dist/solana.js"
+    },
+    "./core": {
+      "types": "./dist/core.d.ts",
+      "import": "./dist/core.js",
+      "default": "./dist/core.js"
+    },
+    "./x402": {
+      "types": "./dist/x402.d.ts",
+      "import": "./dist/x402.js",
+      "default": "./dist/x402.js"
+    },
+    "./react": {
+      "types": "./dist/react.d.ts",
+      "import": "./dist/react.js",
+      "default": "./dist/react.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp.d.ts",
+      "import": "./dist/mcp.js",
+      "default": "./dist/mcp.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "solana",
+    "payments",
+    "privacy",
+    "magicblock",
+    "ephemeral-rollups",
+    "espl",
+    "x402",
+    "mcp",
+    "ai-agents",
+    "react"
+  ],
+  "dependencies": {
+    "@magicblock-labs/hyperpay-core": "*",
+    "@magicblock-labs/hyperpay-solana": "*",
+    "@magicblock-labs/hyperpay-types": "*",
+    "@magicblock-labs/hyperpay-x402": "*"
+  },
+  "peerDependencies": {
+    "@magicblock-labs/hyperpay-react": ">=0.1.0",
+    "@modelcontextprotocol/sdk": ">=1.0.0",
+    "zod": ">=3.23.0"
+  },
+  "peerDependenciesMeta": {
+    "@magicblock-labs/hyperpay-react": {
+      "optional": true
+    },
+    "@modelcontextprotocol/sdk": {
+      "optional": true
+    },
+    "zod": {
+      "optional": true
+    }
+  }
+}
