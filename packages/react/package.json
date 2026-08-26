@@ -60,9 +60,9 @@
     "react-dom": ">=18"
   },
   "dependencies": {
-    "@magicblock-labs/hyperpay-core": "0.1.0",
-    "@magicblock-labs/hyperpay-solana": "0.1.0",
-    "@magicblock-labs/hyperpay-types": "0.1.0"
+    "@magicblock-labs/hyperpay-core": "*",
+    "@magicblock-labs/hyperpay-solana": "*",
+    "@magicblock-labs/hyperpay-types": "*"
   },
   "devDependencies": {
     "@types/react": "^18.3.18",

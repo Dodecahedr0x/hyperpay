@@ -32,5 +32,6 @@
       "@magicblock-labs/hyperpay-react/components": ["./packages/react/src/components/index.ts"]
     }
   },
-  "include": ["packages/*/src", "packages/react/test", "test"]
+  "include": ["packages/*/src", "packages/react/test", "test"],
+  "exclude": ["test/exports"]
 }

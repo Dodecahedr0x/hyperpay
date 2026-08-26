@@ -9,6 +9,45 @@ import { PaymentStatus } from './PaymentStatus.js'
 const FOCUSABLE =
   'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])'
 
+function bindFocusTrap(panel: HTMLDivElement, onClose: () => void): () => void {
+  const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null
+
+  const focusable = () =>
+    Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((el) => !el.hasAttribute('disabled'))
+
+  focusable()[0]?.focus()
+
+  function onKeyDown(event: KeyboardEvent) {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      onClose()
+      return
+    }
+    if (event.key !== 'Tab') return
+    const items = focusable()
+    if (items.length === 0) {
+      event.preventDefault()
+      panel.focus()
+      return
+    }
+    const first = items[0]!
+    const last = items[items.length - 1]!
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault()
+      last.focus()
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault()
+      first.focus()
+    }
+  }
+
+  document.addEventListener('keydown', onKeyDown)
+  return () => {
+    document.removeEventListener('keydown', onKeyDown)
+    previouslyFocused?.focus()
+  }
+}
+
 export interface PayModalProps {
   open: boolean
   to: string
@@ -35,7 +74,7 @@ export function PayModal({
   style,
 }: PayModalProps) {
   const { preview, pay, quote, status, error, payment, busy, reset } = usePay()
-  const dialogRef = useRef<HTMLDivElement>(null)
+  const dialogRef = useRef<HTMLDivElement | null>(null)
   const onErrorRef = useRef(onError)
   onErrorRef.current = onError
 
@@ -52,46 +91,9 @@ export function PayModal({
 
   useEffect(() => {
     if (!open) return
-    const dialog = dialogRef.current
-    if (!dialog) return
-
-    const panel = dialog
-    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null
-
-    const focusable = () =>
-      Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((el) => !el.hasAttribute('disabled'))
-
-    focusable()[0]?.focus()
-
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        onClose()
-        return
-      }
-      if (event.key !== 'Tab') return
-      const items = focusable()
-      if (items.length === 0) {
-        event.preventDefault()
-        panel.focus()
-        return
-      }
-      const first = items[0]!
-      const last = items[items.length - 1]!
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault()
-        last.focus()
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault()
-        first.focus()
-      }
-    }
-
-    document.addEventListener('keydown', onKeyDown)
-    return () => {
-      document.removeEventListener('keydown', onKeyDown)
-      previouslyFocused?.focus()
-    }
+    const panel = dialogRef.current
+    if (!panel) return
+    return bindFocusTrap(panel, onClose)
   }, [open, onClose])
 
   if (!open || typeof document === 'undefined') return null
