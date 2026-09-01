@@ -8,18 +8,21 @@
  *   export HYPERPAY_KEY=~/.config/solana/id.json
  *   export HYPERPAY_CLUSTER=devnet
  *   export OPENROUTER_API_KEY=sk-or-...   # operator only; never sent to clients
+ *   # optional: OPENROUTER_BASE=http://127.0.0.1:4051/api/v1  (mock / self-host)
  *   npx vite-node examples/openrouter/server.ts
  */
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { formatAmount, HyperPay } from '@magicblock-labs/hyperpay'
 
-const PORT = 4050
-const UPSTREAM = 'https://openrouter.ai/api/v1/chat/completions'
-const GENERATION = 'https://openrouter.ai/api/v1/generation'
-const MODELS = 'https://openrouter.ai/api/v1/models'
+const PORT = Number(process.env.PORT ?? 4050)
 const DEFAULT_MAX_TOKENS = 2048
 const ESTIMATE_BUFFER = 1.25
 const FALLBACK_HOLD_USD = Number(process.env.FALLBACK_HOLD_USD ?? '0.25')
+
+function openRouter(path: string) {
+  return `${(process.env.OPENROUTER_BASE ?? 'https://openrouter.ai/api/v1').replace(/\/$/, '')}${path}`
+}
 
 const hp = HyperPay.fromEnv()
 const merchant = hp.signer?.publicKey.toBase58()
@@ -145,7 +148,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     let locked = hold
     const bounded = Buffer.from(JSON.stringify(payload))
     try {
-      const upstream = await fetch(UPSTREAM, {
+      const upstream = await fetch(openRouter('/chat/completions'), {
         method: 'POST',
         headers: {
           authorization: `Bearer ${apiKey}`,
@@ -207,11 +210,11 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
             res.write(value)
           }
         }
+        await settle(apiKey, refId, acct, hold, generationIdFromSse(Buffer.concat(chunks).toString('utf8')))
+        locked = 0n
       } finally {
         res.end()
       }
-      await settle(apiKey, refId, acct, hold, generationIdFromSse(Buffer.concat(chunks).toString('utf8')))
-      locked = 0n
     } catch (error) {
       acct.remaining += locked
       throw error
@@ -259,7 +262,7 @@ async function estimateHold(model: string, messages: unknown, maxTokens: number)
 async function pricingFor(model: string): Promise<{ prompt: number; completion: number } | undefined> {
   if (!modelPrices || Date.now() - modelPrices.fetched > 10 * 60_000) {
     try {
-      const res = await fetch(MODELS)
+      const res = await fetch(openRouter('/models'))
       const body = (await res.json()) as {
         data?: { id?: string; pricing?: { prompt?: string; completion?: string } }[]
       }
@@ -297,7 +300,7 @@ function usdToUnits(usd: number, decimals: number): bigint {
 async function openRouterCost(apiKey: string, id: string): Promise<number | undefined> {
   for (let i = 0; i < 8; i++) {
     await new Promise((r) => setTimeout(r, 250 * (i + 1)))
-    const res = await fetch(`${GENERATION}?id=${encodeURIComponent(id)}`, {
+    const res = await fetch(`${openRouter('/generation')}?id=${encodeURIComponent(id)}`, {
       headers: { authorization: `Bearer ${apiKey}` },
     })
     if (!res.ok) continue
@@ -353,13 +356,21 @@ async function readBody(req: IncomingMessage): Promise<Buffer> {
   return Buffer.concat(chunks)
 }
 
-server.listen(PORT, () => {
-  console.log(`openrouter proxy on http://127.0.0.1:${PORT}`)
-  console.log(`merchant wallet: ${merchant}`)
-  console.log(
-    process.env.OPENROUTER_API_KEY
-      ? 'OPENROUTER_API_KEY set'
-      : 'OPENROUTER_API_KEY missing — completions return 503',
-  )
-  console.log('GET /quote  POST /topup  GET /credits  POST /v1/chat/completions')
-})
+export function start(port = PORT): Promise<{ server: typeof server; port: number }> {
+  return new Promise((resolve) => {
+    server.listen(port, '127.0.0.1', () => {
+      const addr = server.address() as AddressInfo
+      console.log(`openrouter proxy on http://127.0.0.1:${addr.port}`)
+      console.log(`merchant wallet: ${merchant}`)
+      console.log(
+        process.env.OPENROUTER_API_KEY
+          ? 'OPENROUTER_API_KEY set'
+          : 'OPENROUTER_API_KEY missing — completions return 503',
+      )
+      console.log('GET /quote  POST /topup  GET /credits  POST /v1/chat/completions')
+      resolve({ server, port: addr.port })
+    })
+  })
+}
+
+if (!process.env.VITEST) await start()

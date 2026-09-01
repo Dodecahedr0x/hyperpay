@@ -6,7 +6,23 @@ When OpenRouter bills a generation, that USD cost is deducted from a **hold take
 
 The proxy cannot sign the user's key. The ER debit is the top-up (`hp.pay`).
 
-## Setup
+## E2E (no keys)
+
+The example ships a mock OpenRouter and a throwaway merchant wallet. This is the full billing loop: 402 without credit, top-up, hold, capture, refund, upstream failure, stream.
+
+```sh
+npx vitest run examples/openrouter/e2e.test.ts
+```
+
+To also send a real private `pay()` on devnet, pass a funded key (the mock still stands in for OpenRouter):
+
+```sh
+E2E_PAYER_KEY=~/.config/solana/id.json npx vitest run examples/openrouter/e2e.test.ts
+```
+
+`npm test` includes this file.
+
+## Live demo — two terminals
 
 Operator (server):
 
@@ -14,39 +30,26 @@ Operator (server):
 export HYPERPAY_KEY=~/.config/solana/id.json   # merchant wallet
 export HYPERPAY_CLUSTER=devnet
 export OPENROUTER_API_KEY=sk-or-...            # never given to users
+npx vite-node examples/openrouter/server.ts
 ```
 
-User (client) — keypair with USDC (base or rollup):
+User (client) — keypair with USDC (base or rollup). No OpenRouter key:
 
 ```sh
 export HYPERPAY_KEY=~/.hyperpay/agent.json
 export HYPERPAY_CLUSTER=devnet
-# no OPENROUTER_API_KEY
+npx vite-node examples/openrouter/client.ts
+npx vite-node examples/openrouter/client.ts openai/gpt-4o-mini
+npx vite-node examples/openrouter/client.ts --stream "Say hi in one sentence."
 ```
+
+Point the proxy at another OpenRouter-compatible origin with `OPENROUTER_BASE` (default `https://openrouter.ai/api/v1`).
 
 The server starts without `OPENROUTER_API_KEY`. Completions then return **503** until you set one.
 
 This demo may use **one wallet** for merchant and payer (self-pay). Production uses two.
 
 Default top-up is **1 USDC** (`TOPUP_AMOUNT`). Override the proxy with `OPENROUTER_PROXY` (default `http://127.0.0.1:4050`).
-
-## Run — two terminals
-
-Terminal 1:
-
-```sh
-npx vite-node examples/openrouter/server.ts
-```
-
-Terminal 2:
-
-```sh
-npx vite-node examples/openrouter/client.ts
-npx vite-node examples/openrouter/client.ts openai/gpt-4o-mini
-npx vite-node examples/openrouter/client.ts --stream "Say hi in one sentence."
-```
-
-The client tops up from ephemeral USDC if credit is empty, then `POST /v1/chat/completions` with `x-account`. No OpenRouter key on the client.
 
 ## What you should see
 

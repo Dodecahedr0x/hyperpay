@@ -180,7 +180,7 @@ Node examples need `HYPERPAY_KEY` and `HYPERPAY_CLUSTER=devnet`. The React app t
 | [`examples/ai-skill`](examples/ai-skill) | Agent skill: set up a signer, spend caps, fund the rollup, quote then pay |
 | [`examples/metered`](examples/metered) | Prepaid metered API — buy forecast tokens, then spend them |
 | [`examples/x402`](examples/x402) | Paid HTTP resource — `Paywall` server and `payingFetch` client |
-| [`examples/openrouter`](examples/openrouter) | OpenRouter proxy — users pay from ephemeral USDC; server bills actual OpenRouter cost |
+| [`examples/openrouter`](examples/openrouter) | OpenRouter proxy — users pay from ephemeral USDC; `npx vitest run examples/openrouter/e2e.test.ts` is a full loop against a mock upstream |
 
 ---
 
