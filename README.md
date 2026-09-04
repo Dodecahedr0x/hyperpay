@@ -96,6 +96,12 @@ await hp.deposit('100 USDC')          // base layer  → rollup
 await hp.withdraw('50 USDC')          // rollup      → base layer
 ```
 
+A merchant reads remaining session units with `hp.sessionBalance(user)`, then
+debits the session with `hp.charge(user, amount)`. The merchant key signs the
+debit. The user funds the session with `pay`. The client methods exist. The
+hosted API at `https://payments.magicblock.app` does not serve
+`GET /v1/spl/session-balance` or `POST /v1/spl/charge`. Those routes return 404.
+
 ### 2. CLI
 
 ```sh

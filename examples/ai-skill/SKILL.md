@@ -11,7 +11,7 @@ description: >-
 
 HyperPay (`@magicblock-labs/hyperpay`) pays on Solana. Private by default: transfers settle inside a MagicBlock ephemeral rollup. You sign locally; the hosted API (`https://payments.magicblock.app`) never holds keys.
 
-**Always quote, then pay.** Never invent methods (`charge`, `waitForCredit`, `InsufficientFundsError` — they do not exist).
+**Always quote, then pay.** Never invent methods (`waitForCredit`, `InsufficientFundsError` — they do not exist).
 
 ## 1. Signer
 
@@ -133,7 +133,20 @@ claude mcp add hyperpay -- npx @magicblock-labs/hyperpay mcp
 
 Tools: `pay`, `quote`, `balance`, `deposit`, `withdraw`, `policy`. Call `policy` first (caps and remaining daily), then `quote`, then `pay`. The same env policy applies.
 
-## 5. Errors
+## 5. Merchant charge
+
+The user funds the session with `pay`. The merchant then reads the remaining session units and debits them.
+
+```ts
+const remaining = await hp.sessionBalance(user)
+await hp.charge(user, '10 USDC')
+```
+
+`sessionBalance(user)` returns the remaining units on the session with this merchant. `charge(user, amount)` debits that session. The merchant signer signs the debit.
+
+The client methods exist. The hosted API (`https://payments.magicblock.app`) does not serve `GET /v1/spl/session-balance` or `POST /v1/spl/charge`. Those routes return 404.
+
+## 6. Errors
 
 All extend `HyperPayError`. Catch `PolicyError` separately — it means nothing was signed.
 
@@ -147,7 +160,7 @@ All extend `HyperPayError`. Catch `PolicyError` separately — it means nothing 
 
 There is **no** `InsufficientFundsError`.
 
-## 6. x402 (consumer only)
+## 7. x402 (consumer only)
 
 To pay for an HTTP API that returns 402:
 

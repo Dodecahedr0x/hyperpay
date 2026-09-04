@@ -21,6 +21,15 @@
 //! Privacy here reduces **linkability**, not total observability: amounts and
 //! timing may still be inferable at the network level. Private transfers carry
 //! a 0.1% fee in the token itself.
+//!
+//! ## Merchant charge
+//!
+//! A merchant reads remaining session units with [`HyperPay::session_balance`],
+//! then debits the session with [`HyperPay::charge`]. The merchant key signs
+//! the debit. The user funds the session with [`HyperPay::pay`]. The client
+//! methods exist. The hosted API at `https://payments.magicblock.app` does not
+//! serve `GET /v1/spl/session-balance` or `POST /v1/spl/charge`. Those routes
+//! return HTTP 404.
 
 mod amounts;
 mod api;
