@@ -94,15 +94,17 @@ function sites() {
   return found
 }
 
-function stripTag(tag) {
-  return tag.trim().replace(/^['"]|['"]$/g, '').replace(/^v/i, '')
+function parseVersionRef(input) {
+  const cleaned = input.trim().replace(/^['"]|['"]$/g, '')
+  const match = /v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/i.exec(cleaned)
+  return match?.[1]
 }
 
 function check(tag) {
   const expected = rootVersion()
   const problems = []
   if (tag) {
-    const stripped = stripTag(tag)
+    const stripped = parseVersionRef(tag)
     if (stripped !== expected) {
       problems.push(`release tag '${tag}' does not match root version '${expected}'`)
     }

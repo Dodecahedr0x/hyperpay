@@ -88,6 +88,7 @@ describe('scripts/version.mjs', () => {
     expect(run(['align'], dir).status).toBe(0)
     expect(run(['check', 'v1.2.3'], dir).status).toBe(0)
     expect(run(['check', '1.2.3'], dir).status).toBe(0)
+    expect(run(['check', 'release: v1.2.3'], dir).status).toBe(0)
     const mismatch = run(['check', 'v9.9.9'], dir)
     expect(mismatch.status).not.toBe(0)
     expect(mismatch.stderr).toMatch(/1\.2\.3/)
