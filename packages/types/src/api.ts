@@ -68,6 +68,24 @@ export interface BalanceResponse {
   balance: string
 }
 
+/** Merchant-signed debit of the user's ER session. */
+export interface ChargeRequest {
+  user: string
+  merchant: string
+  mint: string
+  amount: number
+  cluster?: Cluster
+  visibility?: 'public' | 'private'
+}
+
+/** Remaining units on the ER session for this user and merchant. */
+export interface SessionBalanceResponse {
+  user: string
+  merchant: string
+  mint: string
+  balance: string
+}
+
 export interface MintStatusResponse {
   mint: string
   validator: string

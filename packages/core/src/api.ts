@@ -1,4 +1,4 @@
-import { ApiError, type ApiOptions, type BalanceResponse, type BuildResponse, type Cluster, type DepositRequest, type MintStatusResponse, type TransferRequest, type WithdrawRequest } from '@magicblock-labs/hyperpay-types'
+import { ApiError, type ApiOptions, type BalanceResponse, type BuildResponse, type ChargeRequest, type Cluster, type DepositRequest, type MintStatusResponse, type SessionBalanceResponse, type TransferRequest, type WithdrawRequest } from '@magicblock-labs/hyperpay-types'
 
 export const DEFAULT_API_URL = 'https://payments.magicblock.app'
 
@@ -6,8 +6,10 @@ export type {
   ApiOptions,
   BalanceResponse,
   BuildResponse,
+  ChargeRequest,
   DepositRequest,
   MintStatusResponse,
+  SessionBalanceResponse,
   TransferRequest,
   WithdrawRequest,
 }
@@ -40,6 +42,13 @@ export class PaymentsApi {
 
   balance = (address: string, mint: string, cluster?: Cluster) =>
     this.get<BalanceResponse>('/v1/spl/balance', { address, mint, cluster })
+
+  /** Remaining units on the ER session. */
+  sessionBalance = (user: string, merchant: string, mint: string, cluster?: Cluster) =>
+    this.get<SessionBalanceResponse>('/v1/spl/session-balance', { user, merchant, mint, cluster })
+
+  /** Builds a merchant-signed debit of the user's ER session. */
+  charge = (req: ChargeRequest) => this.post<BuildResponse>('/v1/spl/charge', req)
 
   /** Requires `authToken`. Reads the ephemeral-rollup balance. */
   privateBalance = (address: string, mint: string, cluster?: Cluster) =>

@@ -317,6 +317,54 @@ export class HyperPay {
     return { mint: token.mint, signature: result.signature, alreadyInitialized: false }
   }
 
+  /**
+   * Remaining units on the ER session with this merchant.
+   * The merchant is this wallet. The mint is the default token.
+   */
+  async sessionBalance(user: string): Promise<Balances> {
+    const merchant = this.requireSigner().publicKey.toBase58()
+    const token = await this.tokens.resolve(this.defaultToken)
+    const response = await this.api.sessionBalance(user, merchant, token.mint, this.cluster)
+    return {
+      address: user,
+      token,
+      base: fromBaseUnits(BigInt(response.balance), token.decimals),
+      baseUnits: response.balance,
+    }
+  }
+
+  /**
+   * Debits the user's ER session. The merchant signer signs the debit.
+   * Visibility is private.
+   */
+  async charge(user: string, amount: string | number | bigint): Promise<Payment> {
+    const merchant = this.requireSigner().publicKey.toBase58()
+    const { token, units } = await this.resolveAmount(amount)
+    this.policy.check({ to: merchant, token, units })
+    const { built, result } = await this.buildAndSubmit(() =>
+      this.api.charge({
+        user,
+        merchant,
+        mint: token.mint,
+        amount: Number(units),
+        cluster: this.cluster,
+        visibility: 'private',
+      }),
+    )
+    return {
+      signature: result.signature,
+      to: merchant,
+      amount: formatAmount(units, token),
+      units: units.toString(),
+      token,
+      visibility: 'private',
+      settledOn: result.settledOn,
+      rpcUrl: result.rpcUrl,
+      fees: built.fees,
+      explorerUrl: result.settledOn === 'base' ? this.explorerUrl(result.signature) : undefined,
+    }
+  }
+
   /** Base-layer and (when authenticated) ephemeral balances. */
   async balance(opts: { token?: string; address?: string } = {}): Promise<Balances> {
     const address = opts.address ?? this.requireSigner().publicKey.toBase58()

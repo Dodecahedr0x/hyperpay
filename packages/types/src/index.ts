@@ -22,7 +22,9 @@ export type {
   TransferRequest,
   DepositRequest,
   WithdrawRequest,
+  ChargeRequest,
   BalanceResponse,
+  SessionBalanceResponse,
   MintStatusResponse,
   ApiOptions,
 } from './api.js'

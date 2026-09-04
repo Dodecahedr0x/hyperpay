@@ -9,8 +9,10 @@ export type {
   ApiOptions,
   BalanceResponse,
   BuildResponse,
+  ChargeRequest,
   DepositRequest,
   MintStatusResponse,
+  SessionBalanceResponse,
   TransferRequest,
   WithdrawRequest,
 } from './api.js'
