@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "license": "MIT",
+  "version": "0.1.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/magicblock-labs/hyperpay.git"

@@ -61,5 +61,13 @@ build-rs:
 install:
     npm install
 
+# Copy the root package.json version onto workspace packages, the crate, and lockfiles
+version-align:
+    node scripts/version.mjs align
+
+# Fail if any package/crate version drifted from the root. Optional release tag must match too.
+version-check tag="":
+    node scripts/version.mjs check {{quote(tag)}}
+
 # Local gate: typecheck, unit tests, fmt, clippy
 check: typecheck test-all lint

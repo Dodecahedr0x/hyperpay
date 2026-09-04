@@ -85,6 +85,12 @@ describe('lookupKnownToken', () => {
     expect(lookupKnownToken('usdc', 'mainnet')?.symbol).toBe('USDC')
     expect(lookupKnownToken('NOPE', 'mainnet')).toBeUndefined()
   })
+
+  it('resolves a known mint the same way as its symbol', () => {
+    const mint = '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU'
+    expect(lookupKnownToken(mint, 'devnet')?.symbol).toBe('USDC')
+    expect(lookupKnownToken(mint, 'devnet')?.decimals).toBe(6)
+  })
 })
 
 describe('formatAmount', () => {

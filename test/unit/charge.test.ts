@@ -156,7 +156,7 @@ describe('HyperPay.charge', () => {
   })
 
   it('posts a private charge for this merchant and does not submit a chain transaction', async () => {
-    const fetch = vi.fn(async () =>
+    const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
       jsonOk({
         kind: 'transfer',
         version: 'legacy',

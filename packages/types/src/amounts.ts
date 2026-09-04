@@ -29,9 +29,10 @@ export function tokenFamily(cluster: Cluster): 'mainnet' | 'devnet' {
   return String(cluster).includes('devnet') ? 'devnet' : 'mainnet'
 }
 
-export function lookupKnownToken(symbol: string, cluster: Cluster): TokenInfo | undefined {
-  const want = symbol.trim().toUpperCase()
-  return KNOWN_TOKENS[tokenFamily(cluster)].find((t) => t.symbol === want)
+export function lookupKnownToken(spec: string, cluster: Cluster): TokenInfo | undefined {
+  const want = spec.trim()
+  const wantUpper = want.toUpperCase()
+  return KNOWN_TOKENS[tokenFamily(cluster)].find((t) => t.symbol === wantUpper || t.mint === want)
 }
 
 const NUMERIC = /^[0-9][0-9,]*(?:\.[0-9]+)?$/

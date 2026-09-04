@@ -12,16 +12,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Match crate version to release tag
-        run: |
-          set -euo pipefail
-          tag="${GITHUB_REF_NAME#v}"
-          version=$(sed -nE 's/^version = "([^"]+)"/\1/p' crates/hyperpay/Cargo.toml | head -n1)
-          if [ "$tag" != "$version" ]; then
-            echo "GitHub release tag '${GITHUB_REF_NAME}' does not match crate version '${version}'"
-            exit 1
-          fi
+      - uses: extractions/setup-just@v4
+      - name: Check versions match
+        run: just version-check "{{ github.event.release.tag_name }}"
 
       - uses: dtolnay/rust-toolchain@stable
 

@@ -81,11 +81,18 @@ afterEach(() => {
 
 describe('useHyperPay', () => {
   it('throws outside of HyperPayProvider', () => {
+    let caught: unknown
     function Boom() {
-      useHyperPay()
+      try {
+        useHyperPay()
+      } catch (error) {
+        caught = error
+      }
       return null
     }
-    expect(() => render(<Boom />)).toThrow(/HyperPayProvider/)
+    render(<Boom />)
+    expect(caught).toBeInstanceOf(Error)
+    expect(String(caught)).toMatch(/HyperPayProvider/)
   })
 
   it('returns the provided client', () => {
