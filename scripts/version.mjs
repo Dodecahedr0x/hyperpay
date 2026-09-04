@@ -95,7 +95,7 @@ function sites() {
 }
 
 function stripTag(tag) {
-  return tag.replace(/^v/, '')
+  return tag.trim().replace(/^['"]|['"]$/g, '').replace(/^v/i, '')
 }
 
 function check(tag) {

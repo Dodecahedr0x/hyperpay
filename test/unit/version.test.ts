@@ -82,11 +82,12 @@ describe('scripts/version.mjs', () => {
     expect(JSON.parse(readFileSync(join(dir, 'package-lock.json'), 'utf8')).version).toBe('1.2.3')
   })
 
-  it('requires an optional release tag to match the root version', () => {
+  it('treats a v-prefixed release tag as the same as the root version', () => {
     const dir = fixture()
     dirs.push(dir)
     expect(run(['align'], dir).status).toBe(0)
     expect(run(['check', 'v1.2.3'], dir).status).toBe(0)
+    expect(run(['check', '1.2.3'], dir).status).toBe(0)
     const mismatch = run(['check', 'v9.9.9'], dir)
     expect(mismatch.status).not.toBe(0)
     expect(mismatch.stderr).toMatch(/1\.2\.3/)

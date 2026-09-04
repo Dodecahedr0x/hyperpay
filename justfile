@@ -65,7 +65,8 @@ install:
 version-align:
     node scripts/version.mjs align
 
-# Fail if any package/crate version drifted from the root. Optional release tag must match too.
+# Fail if any package/crate version drifted from the root.
+# Release tags like v0.1.0 match versions like 0.1.0.
 version-check tag="":
     node scripts/version.mjs check {{quote(tag)}}
 
