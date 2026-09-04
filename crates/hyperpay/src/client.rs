@@ -3,7 +3,9 @@ use solana_sdk::{signature::Keypair, signer::Signer};
 use crate::amounts::{
     format_amount, from_base_units, lookup_known_token, parse_money, to_base_units, TokenInfo,
 };
-use crate::api::{new_ref_id, DepositRequest, Fees, PaymentsApi, TransferRequest, WithdrawRequest};
+use crate::api::{
+    new_ref_id, ChargeRequest, DepositRequest, Fees, PaymentsApi, TransferRequest, WithdrawRequest,
+};
 use crate::engine::{base_rpc_for, sign_and_submit};
 use crate::error::{HyperPayError, Result};
 use crate::policy::Policy;
@@ -15,7 +17,7 @@ pub enum Visibility {
 }
 
 impl Visibility {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Visibility::Private => "private",
             Visibility::Public => "public",
@@ -251,6 +253,56 @@ impl HyperPay {
         })
     }
 
+    /// Remaining USDC (or default token) on the ER session with this merchant.
+    pub async fn session_balance(&self, user: &str) -> Result<Balance> {
+        let token = self.resolve_token(&self.default_token)?;
+        let merchant = self.address()?;
+        let response = self
+            .api
+            .session_balance(user, &merchant, &token.mint, &self.cluster)
+            .await?;
+        let units: u64 = response.balance.parse().unwrap_or(0);
+        Ok(Balance {
+            base: from_base_units(units, token.decimals),
+            base_units: units,
+            address: user.to_string(),
+            token,
+        })
+    }
+
+    /// Debit the user's ER session. Signs with the merchant key.
+    pub async fn charge(&self, user: &str, amount: &str) -> Result<Payment> {
+        let (token, units) = self.resolve_amount(amount, None)?;
+        let merchant = self.address()?;
+        self.policy.check(&merchant, &token, units)?;
+        let build = self
+            .api
+            .charge(&ChargeRequest {
+                user: user.to_string(),
+                merchant: merchant.clone(),
+                mint: token.mint.clone(),
+                amount: units,
+                cluster: Some(self.cluster.clone()),
+                visibility: Some(Visibility::Private.as_str().to_string()),
+            })
+            .await?;
+        let result =
+            sign_and_submit(&build, self.signer()?, &self.cluster, Some(&self.rpc_url)).await?;
+        Ok(Payment {
+            explorer_url: (result.settled_on == "base")
+                .then(|| self.explorer_url(&result.signature)),
+            signature: result.signature,
+            ref_id: None,
+            to: merchant,
+            amount: format_amount(units, &token),
+            units,
+            token,
+            visibility: Visibility::Private,
+            settled_on: result.settled_on,
+            fees: build.fees,
+        })
+    }
+
     pub fn explorer_url(&self, signature: &str) -> String {
         let suffix = if self.cluster.contains("devnet") {
             "?cluster=devnet"
@@ -337,4 +389,74 @@ pub fn load_keypair(source: &str) -> Result<Keypair> {
 
     Keypair::try_from(bytes.as_slice())
         .map_err(|e| HyperPayError::Resolution(format!("invalid keypair bytes: {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    const DEVNET_USDC: &str = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+    const USER: &str = "User11111111111111111111111111111111";
+
+    fn restore_var(key: &str, previous: Option<String>) {
+        match previous {
+            Some(value) => std::env::set_var(key, value),
+            None => std::env::remove_var(key),
+        }
+    }
+
+    #[tokio::test]
+    async fn session_balance_reads_units() {
+        let _guard = ENV_LOCK.lock().unwrap();
+
+        let server = MockServer::start().await;
+        let keypair = Keypair::new();
+        let merchant = keypair.pubkey().to_string();
+        let key_json = serde_json::to_string(&keypair.to_bytes().to_vec()).unwrap();
+
+        Mock::given(method("GET"))
+            .and(path("/v1/spl/session-balance"))
+            .and(query_param("user", USER))
+            .and(query_param("merchant", &merchant))
+            .and(query_param("mint", DEVNET_USDC))
+            .and(query_param("cluster", "devnet"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "user": USER,
+                "merchant": merchant,
+                "mint": DEVNET_USDC,
+                "balance": "42000"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let prev_key = std::env::var("HYPERPAY_KEY").ok();
+        let prev_cluster = std::env::var("HYPERPAY_CLUSTER").ok();
+        let prev_api = std::env::var("HYPERPAY_API").ok();
+        let prev_token = std::env::var("HYPERPAY_TOKEN").ok();
+        std::env::set_var("HYPERPAY_KEY", &key_json);
+        std::env::set_var("HYPERPAY_CLUSTER", "devnet");
+        std::env::set_var("HYPERPAY_API", server.uri());
+        std::env::remove_var("HYPERPAY_TOKEN");
+
+        let result = async {
+            let hp = HyperPay::from_env()?;
+            hp.session_balance(USER).await
+        }
+        .await;
+
+        restore_var("HYPERPAY_KEY", prev_key);
+        restore_var("HYPERPAY_CLUSTER", prev_cluster);
+        restore_var("HYPERPAY_API", prev_api);
+        restore_var("HYPERPAY_TOKEN", prev_token);
+
+        let b = result.unwrap();
+        assert_eq!(b.base_units, 42_000);
+        assert_eq!(b.address, USER);
+    }
 }
