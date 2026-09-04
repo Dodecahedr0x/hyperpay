@@ -66,9 +66,31 @@ version-align:
     node scripts/version.mjs align
 
 # Fail if any package/crate version drifted from the root.
-# Release tags like v0.1.0 match versions like 0.1.0.
+# Release tags like v0.1.0 and PR titles like "release: v0.1.0" match version 0.1.0.
 version-check tag="":
     node scripts/version.mjs check {{quote(tag)}}
+
+# Dry-run crates.io publish (no upload)
+publish-dry-crate:
+    cargo publish --dry-run --locked --manifest-path {{crate}}/Cargo.toml
+
+# Dry-run npm workspace publish (no upload). Public packages only — the
+# example workspace has no version and crashes `npm publish -ws`.
+publish-dry-npm:
+    npm run build
+    npm publish --access public --dry-run \
+      -w @magicblock-labs/hyperpay-types \
+      -w @magicblock-labs/hyperpay-solana \
+      -w @magicblock-labs/hyperpay-core \
+      -w @magicblock-labs/hyperpay-x402 \
+      -w @magicblock-labs/hyperpay-react \
+      -w @magicblock-labs/hyperpay
+
+# Check versions, then dry-run crate and npm publish. Optional tag or "release: vX.Y.Z" title.
+publish-dry tag="":
+    just version-check {{quote(tag)}}
+    just publish-dry-crate
+    just publish-dry-npm
 
 # Local gate: typecheck, unit tests, fmt, clippy
 check: typecheck test-all lint
