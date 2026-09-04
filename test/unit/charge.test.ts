@@ -156,17 +156,8 @@ describe('HyperPay.charge', () => {
   })
 
   it('posts a private charge for this merchant and does not submit a chain transaction', async () => {
-    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      expect(String(input)).toBe(`${API}/v1/spl/charge`)
-      expect(JSON.parse(String(init?.body))).toEqual({
-        user: USER,
-        merchant: MERCHANT,
-        mint: DEVNET_USDC,
-        amount: 10_000,
-        cluster: 'devnet',
-        visibility: 'private',
-      })
-      return jsonOk({
+    const fetch = vi.fn(async () =>
+      jsonOk({
         kind: 'transfer',
         version: 'legacy',
         transactionBase64: 'not-a-real-transaction',
@@ -175,8 +166,8 @@ describe('HyperPay.charge', () => {
         lastValidBlockHeight: 1,
         instructionCount: 1,
         requiredSigners: [],
-      })
-    })
+      }),
+    )
     globalThis.fetch = fetch as typeof globalThis.fetch
 
     const hp = new HyperPay({
@@ -185,7 +176,21 @@ describe('HyperPay.charge', () => {
       apiUrl: API,
     })
 
-    await expect(hp.charge(USER, '0.01 USDC')).rejects.toThrow()
+    await expect(hp.charge(USER, '0.01 USDC')).rejects.toThrow(
+      /invalid|decode|transaction|buffer/i,
+    )
+
     expect(fetch).toHaveBeenCalledTimes(1)
+    const [url, init] = fetch.mock.calls[0]!
+    expect(String(url)).toBe(`${API}/v1/spl/charge`)
+    expect(init?.method).toBe('POST')
+    expect(JSON.parse(String(init?.body))).toEqual({
+      user: USER,
+      merchant: MERCHANT,
+      mint: DEVNET_USDC,
+      amount: 10_000,
+      cluster: 'devnet',
+      visibility: 'private',
+    })
   })
 })
