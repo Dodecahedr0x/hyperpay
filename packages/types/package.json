@@ -1,6 +1,6 @@
 {
   "name": "@magicblock-labs/hyperpay-types",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Shared types, errors, and amount helpers for HyperPay.",
   "license": "MIT",
   "type": "module",

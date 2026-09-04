@@ -1,6 +1,6 @@
 {
   "name": "@magicblock-labs/hyperpay-core",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "HyperPay client: quote, pay, deposit, withdraw, and spend policy.",
   "license": "MIT",
   "type": "module",

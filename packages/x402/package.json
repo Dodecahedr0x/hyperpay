@@ -1,6 +1,6 @@
 {
   "name": "@magicblock-labs/hyperpay-x402",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "HTTP 402 paywall and auto-paying fetch for HyperPay.",
   "license": "MIT",
   "type": "module",

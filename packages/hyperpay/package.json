@@ -1,6 +1,6 @@
 {
   "name": "@magicblock-labs/hyperpay",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "The easiest way to pay on Solana. Private, instant, agent-ready — built on MagicBlock ephemeral rollups and eSPL.",
   "license": "MIT",
   "type": "module",
@@ -96,7 +96,7 @@
     "@magicblock-labs/hyperpay-x402": "*"
   },
   "peerDependencies": {
-    "@magicblock-labs/hyperpay-react": ">=0.1.0",
+    "@magicblock-labs/hyperpay-react": ">=0.1.2",
     "@modelcontextprotocol/sdk": ">=1.0.0",
     "zod": ">=3.23.0"
   },

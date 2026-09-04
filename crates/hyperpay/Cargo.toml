@@ -1,6 +1,6 @@
 [package]
 name = "hyperpay"
-version = "0.1.0"
+version = "0.1.2"
 edition = "2021"
 license = "MIT"
 description = "The easiest way to pay on Solana. Private, instant, agent-ready — built on MagicBlock ephemeral rollups and eSPL."
