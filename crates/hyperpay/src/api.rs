@@ -65,6 +65,27 @@ pub struct TransferRequest {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ChargeRequest {
+    pub user: String,
+    pub merchant: String,
+    pub mint: String,
+    pub amount: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cluster: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SessionBalanceResponse {
+    pub user: String,
+    pub merchant: String,
+    pub mint: String,
+    pub balance: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DepositRequest {
     pub owner: String,
     pub mint: String,
@@ -247,4 +268,33 @@ pub fn new_ref_id() -> String {
     let mut hasher = RandomState::new().build_hasher();
     hasher.write_u64(nanos);
     hasher.finish().to_string()
+}
+
+#[cfg(test)]
+mod charge_types_tests {
+    use super::*;
+
+    #[test]
+    fn charge_request_camel_case() {
+        let req = ChargeRequest {
+            user: "User11111111111111111111111111111111".into(),
+            merchant: "Merch111111111111111111111111111111".into(),
+            mint: "Usd11111111111111111111111111111111".into(),
+            amount: 10_000,
+            cluster: Some("devnet".into()),
+            visibility: Some("private".into()),
+        };
+        let v = serde_json::to_value(&req).unwrap();
+        assert_eq!(v["user"], "User11111111111111111111111111111111");
+        assert_eq!(v["amount"], 10000);
+        assert!(v.get("clientRefId").is_none());
+    }
+
+    #[test]
+    fn session_balance_response_parses_units_string() {
+        let raw = r#"{"user":"u","merchant":"m","mint":"t","balance":"5000"}"#;
+        let b: SessionBalanceResponse = serde_json::from_str(raw).unwrap();
+        assert_eq!(b.balance, "5000");
+        assert_eq!(b.user, "u");
+    }
 }
