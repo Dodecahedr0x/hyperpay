@@ -176,6 +176,29 @@ impl PaymentsApi {
         .await
     }
 
+    pub async fn session_balance(
+        &self,
+        user: &str,
+        merchant: &str,
+        mint: &str,
+        cluster: &str,
+    ) -> Result<SessionBalanceResponse> {
+        self.get(
+            "/v1/spl/session-balance",
+            &[
+                ("user", user),
+                ("merchant", merchant),
+                ("mint", mint),
+                ("cluster", cluster),
+            ],
+        )
+        .await
+    }
+
+    pub async fn charge(&self, req: &ChargeRequest) -> Result<BuildResponse> {
+        self.post("/v1/spl/charge", req).await
+    }
+
     async fn post<B: Serialize, T: for<'de> Deserialize<'de>>(
         &self,
         path: &str,
@@ -296,5 +319,87 @@ mod charge_types_tests {
         let b: SessionBalanceResponse = serde_json::from_str(raw).unwrap();
         assert_eq!(b.balance, "5000");
         assert_eq!(b.user, "u");
+    }
+}
+
+#[cfg(test)]
+mod payments_api_http_tests {
+    use super::*;
+    use wiremock::matchers::{body_json, method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn payments_api_session_balance_gets_query_and_parses_balance() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/spl/session-balance"))
+            .and(query_param("user", "User11111111111111111111111111111111"))
+            .and(query_param(
+                "merchant",
+                "Merch111111111111111111111111111111",
+            ))
+            .and(query_param("mint", "Usd11111111111111111111111111111111"))
+            .and(query_param("cluster", "devnet"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "user": "User11111111111111111111111111111111",
+                "merchant": "Merch111111111111111111111111111111",
+                "mint": "Usd11111111111111111111111111111111",
+                "balance": "5000"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let api = PaymentsApi::new(&server.uri());
+        let res = api
+            .session_balance(
+                "User11111111111111111111111111111111",
+                "Merch111111111111111111111111111111",
+                "Usd11111111111111111111111111111111",
+                "devnet",
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res.balance, "5000");
+        assert_eq!(res.user, "User11111111111111111111111111111111");
+        assert_eq!(res.merchant, "Merch111111111111111111111111111111");
+        assert_eq!(res.mint, "Usd11111111111111111111111111111111");
+    }
+
+    #[tokio::test]
+    async fn payments_api_charge_posts_and_deserializes_build_response() {
+        let server = MockServer::start().await;
+        let req = ChargeRequest {
+            user: "User11111111111111111111111111111111".into(),
+            merchant: "Merch111111111111111111111111111111".into(),
+            mint: "Usd11111111111111111111111111111111".into(),
+            amount: 10_000,
+            cluster: Some("devnet".into()),
+            visibility: Some("private".into()),
+        };
+        Mock::given(method("POST"))
+            .and(path("/v1/spl/charge"))
+            .and(body_json(serde_json::json!({
+                "user": "User11111111111111111111111111111111",
+                "merchant": "Merch111111111111111111111111111111",
+                "mint": "Usd11111111111111111111111111111111",
+                "amount": 10000,
+                "cluster": "devnet",
+                "visibility": "private"
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "transactionBase64": "dGVzdA==",
+                "sendTo": "ephemeral"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let api = PaymentsApi::new(&server.uri());
+        let res = api.charge(&req).await.unwrap();
+
+        assert_eq!(res.transaction_base64, "dGVzdA==");
+        assert_eq!(res.send_to, "ephemeral");
     }
 }
