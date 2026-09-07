@@ -1,45 +1,38 @@
 //! # HyperPay
 //!
-//! The easiest way to pay on Solana — private by default, agent-ready.
-//!
-//! Payments settle inside a [MagicBlock](https://magicblock.xyz) ephemeral
-//! rollup using ephemeral SPL (eSPL) tokens, so amounts and counterparties are
-//! not broadcast on the base layer.
+//! Client for the HyperPay payment-session program on Solana. The SDK builds,
+//! signs, and submits program instructions — it does not call a hosted payments
+//! API.
 //!
 //! ```no_run
-//! use hyperpay::{HyperPay, PayOptions};
+//! use hyperpay::HyperPay;
 //!
 //! # async fn demo() -> hyperpay::Result<()> {
 //! let hp = HyperPay::from_env()?;
-//! let payment = hp.pay("alice@magicblock.id", "10 USDC", PayOptions::default()).await?;
+//! let payment = hp.charge("User11111111111111111111111111111111", "10 USDC").await?;
 //! println!("paid: {}", payment.signature);
 //! # Ok(()) }
 //! ```
-//!
-//! ## Privacy
-//!
-//! Privacy here reduces **linkability**, not total observability: amounts and
-//! timing may still be inferable at the network level. Private transfers carry
-//! a 0.1% fee in the token itself.
 //!
 //! ## Merchant charge
 //!
 //! A merchant reads remaining session units with [`HyperPay::session_balance`],
 //! then debits the session with [`HyperPay::charge`]. The merchant key signs
-//! the debit. The user funds the session with [`HyperPay::pay`]. The client
-//! methods exist. The hosted API at `https://payments.magicblock.app` does not
-//! serve `GET /v1/spl/session-balance` or `POST /v1/spl/charge`. Those routes
-//! return HTTP 404.
+//! the debit. The user opens the session with [`HyperPay::open_session`].
 
 mod amounts;
-mod api;
 mod client;
 mod engine;
 mod error;
 mod policy;
+mod program;
 
 pub use amounts::{format_amount, from_base_units, to_base_units, TokenInfo};
-pub use api::Fees;
-pub use client::{load_keypair, Balance, HyperPay, PayOptions, Payment, Visibility};
+pub use client::{load_keypair, Balance, HyperPay, Payment};
 pub use error::{HyperPayError, Result};
 pub use policy::Policy;
+pub use program::{
+    associated_token_address, charge_ix, close_session_ix, deposit_ix, eata_pda, fund_user_ix,
+    init_user_ix, open_session_ix, session_pda, user_mint_pda, user_pda, withdraw_ix,
+    SessionAccounts, WithdrawAccounts, PROGRAM_ID, SESSION_REMAINING_OFFSET,
+};

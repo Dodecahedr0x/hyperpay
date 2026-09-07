@@ -6,7 +6,7 @@ pub enum HyperPayError {
     #[error("blocked by spend policy: {0}")]
     Policy(String),
 
-    #[error("payments API error{}: {message}", .code.as_ref().map(|c| format!(" ({c})")).unwrap_or_default())]
+    #[error("RPC error{}: {message}", .code.as_ref().map(|c| format!(" ({c})")).unwrap_or_default())]
     Api {
         message: String,
         code: Option<String>,
@@ -24,7 +24,7 @@ pub enum HyperPayError {
     #[error("network error: {0}")]
     Network(#[from] reqwest::Error),
 
-    #[error("malformed transaction from the API: {0}")]
+    #[error("malformed transaction: {0}")]
     Encoding(String),
 }
 
