@@ -1,39 +1,39 @@
 # HyperPay
 
-**The easiest way to pay on Solana.** Private by default, instant, and built for agents.
+Payment sessions on Solana. A user opens a session with a merchant; the merchant
+`charge`s it. The SDK builds, signs, and submits the
+[hyperpay program](programs/hyperpay) — it does not call a hosted payments API.
+
+Program id: `Adyo1eYuP8deoLxwgkvaomUYvAUKUGryh4RGpdTR9YhU`
 
 ```ts
 import { HyperPay } from '@magicblock-labs/hyperpay'
 
-const hp = HyperPay.fromEnv()
-await hp.pay('alice@magicblock.id', '10 USDC')
+const user = HyperPay.fromEnv()
+await user.initUser(1_000_000n)
+await user.fundUser(1_000_000n)
+// Top up the User eATA with eSPL outside HyperPay, then:
+await user.openSession(merchant, '10 USDC')
+
+const merchantHp = new HyperPay({ key: merchantKey, cluster: 'devnet' })
+await merchantHp.charge(userWallet, '1 USDC')
 ```
 
-That one call resolves the token, checks your spend policy, builds the transaction, signs it,
-routes it to the right network, and waits for confirmation. The payment settles inside a
-[MagicBlock](https://magicblock.xyz) **private ephemeral rollup** using **ephemeral SPL (eSPL)**
-tokens, so the transfer is not broadcast publicly on the base layer.
+Typical flow: `initUser` → `fundUser` → (eSPL top-up outside HyperPay) →
+`openSession(merchant, amount)` → merchant `charge` → `closeSession` → `withdraw`.
 
 ---
 
 ## Why this exists
 
-MagicBlock's payments API is excellent, but it hands you an **unsigned transaction**. Between
-"I want to pay Alice" and "Alice has the money" you still have to:
+The user PDA sponsors fees and is the token authority. Tokens sit in an eSPL eATA
+owned by that PDA. `remaining` + `reserved` isolate merchants: opening a session
+reserves units; `charge` is a PDA-signed transfer the merchant (or the user)
+authorizes. Session keys work too — pass `authority` when the signer is not the
+wallet that owns the User PDA.
 
-1. Convert `10 USDC` into `10000000` using the mint's decimals.
-2. Choose the right combination of `initIfMissing` / `initAtasIfMissing` / `initVaultIfMissing` —
-   set all three and your transaction exceeds the 1232-byte limit.
-3. Decode base64 and detect `legacy` vs `v0`.
-4. Sign, then submit to `sendTo` — the **base** cluster or the **ephemeral** RPC. These are
-   different networks, and picking wrong fails with `blockhash not found`.
-5. Poll for confirmation on whichever network you used.
-6. Create the recipient's token account yourself — `initAtasIfMissing` creates the *sender's*,
-   so a public payment to a new wallet fails with `InvalidAccountData`.
-7. Do a challenge/sign/login handshake before you can read a private balance.
-
-HyperPay is that entire list, deleted. It does not reimplement rollups or cryptography — it is a
-client-side ergonomics and safety layer over an API that already works.
+HyperPay is the client for that program: amounts, spend policy, instruction
+builders, sign, submit, confirm.
 
 ---
 
@@ -48,8 +48,8 @@ The repo is an npm workspace. Each concern is its own package; the umbrella re-e
 | Package | What |
 |---|---|
 | `@magicblock-labs/hyperpay` | Umbrella + CLI + MCP. `export *` per submodule so unused packages drop. |
-| `@magicblock-labs/hyperpay-core` | `HyperPay`, policy, payments API |
-| `@magicblock-labs/hyperpay-types` | Amounts, errors, wire types |
+| `@magicblock-labs/hyperpay-core` | `HyperPay`, program Ixs, policy |
+| `@magicblock-labs/hyperpay-types` | Amounts, errors |
 | `@magicblock-labs/hyperpay-solana` | Signers, ATA, submit/confirm |
 | `@magicblock-labs/hyperpay-x402` | HTTP 402 paywall + `payingFetch` |
 | `@magicblock-labs/hyperpay-react` | Provider, hooks, PayButton / PayModal / PaymentStatus |
@@ -62,9 +62,9 @@ import { HyperPay } from '@magicblock-labs/hyperpay-core'
 import { PayButton } from '@magicblock-labs/hyperpay-react'
 ```
 
-`PaymentsApi`, `memoryJournal`, and `fileJournal` live on `@magicblock-labs/hyperpay-core` (or `@magicblock-labs/hyperpay/core`), not the umbrella root.
+`memoryJournal` and `fileJournal` live on `@magicblock-labs/hyperpay-core` (or `@magicblock-labs/hyperpay/core`), not the umbrella root.
 
-`HyperPay.fromEnv()` and `{ key }` are Node-only. In the browser, pass `{ signer }` or `{ wallet }`.
+`HyperPay.fromEnv()` and `{ key }` are Node-only. In the browser, pass `{ signer }`.
 
 The CLI binary is `hyperpay`, so once the package is a dependency (or installed globally) you can
 just run `hyperpay …`. With `npx`, always include the scope — bare `npx hyperpay` would resolve to
@@ -84,30 +84,35 @@ export HYPERPAY_CLUSTER=devnet                 # or mainnet
 ```ts
 import { HyperPay } from '@magicblock-labs/hyperpay'
 
-const hp = HyperPay.fromEnv() // Node-only; in the browser pass { signer } or { wallet }
+const user = HyperPay.fromEnv() // Node-only; in the browser pass { signer }
 
-await hp.pay('alice@magicblock.id', '10 USDC')          // private by default
-await hp.pay(pubkey, '2.5 USDC', { visibility: 'public' })
-await hp.pay(pubkey, '10 USDC', { split: 5, delayMs: [1000, 30000] })  // harder to correlate
+await user.initUser(1_000_000n)
+await user.fundUser(500_000n)
+await user.openSession(merchant, '10 USDC')
+await user.deposit(merchant, '2 USDC')          // reserve more into an open session
+await user.closeSession(merchant)
+await user.withdraw('5 USDC')                   // unreserved eATA → destination eATA
 
-await hp.balance()                    // { base, private, ... }
-await hp.quote(pubkey, '10 USDC')     // price it without sending
-await hp.deposit('100 USDC')          // base layer  → rollup
-await hp.withdraw('50 USDC')          // rollup      → base layer
+const merchantHp = new HyperPay({ key: merchantKey, cluster: 'devnet' })
+await merchantHp.sessionBalance(userWallet)     // remaining on this merchant's session
+await merchantHp.charge(userWallet, '1 USDC')   // merchant signs the debit
+
+await user.balance()                            // base-layer ATA
+await user.quote(merchant, '10 USDC')           // policy-check, send nothing
 ```
 
-A merchant reads remaining session units with `hp.sessionBalance(user)`, then
-debits the session with `hp.charge(user, amount)`. The merchant key signs the
-debit. The user funds the session with `pay`. The client methods exist. The
-hosted API at `https://payments.magicblock.app` does not serve
-`GET /v1/spl/session-balance` or `POST /v1/spl/charge`. Those routes return 404.
+The user must `openSession` before a merchant can `charge`. Never pass a user's
+session token to a merchant `charge`.
 
 ### 2. CLI
 
 ```sh
-npx @magicblock-labs/hyperpay pay alice@magicblock.id "10 USDC"
-npx @magicblock-labs/hyperpay balance
-npx @magicblock-labs/hyperpay quote <pubkey> "10 USDC"
+npx @magicblock-labs/hyperpay init-user 1000000
+npx @magicblock-labs/hyperpay open-session <merchant> "10 USDC"
+npx @magicblock-labs/hyperpay charge <user> "1 USDC"
+npx @magicblock-labs/hyperpay session-balance <user>
+npx @magicblock-labs/hyperpay close-session <merchant>
+npx @magicblock-labs/hyperpay withdraw "5 USDC"
 ```
 
 ### 3. MCP — give an agent a wallet
@@ -116,11 +121,14 @@ npx @magicblock-labs/hyperpay quote <pubkey> "10 USDC"
 claude mcp add hyperpay -- npx @magicblock-labs/hyperpay mcp
 ```
 
-The agent gets six tools: `pay`, `quote`, `balance`, `deposit`, `withdraw`, and `policy`.
-`policy` reports the agent's own spending limits, so it can find out what it is allowed to
-spend before trying.
+The agent gets `open_session`, `charge`, `deposit`, `withdraw`, `session_balance`,
+`balance`, and `policy`. `policy` reports the agent's own spending limits, so it
+can find out what it is allowed to spend before trying.
 
 ### 4. x402 — agents paying for APIs, with no human in the loop
+
+The user opens a session first. The merchant `charge`s that session; there is no
+transfer-API fallback.
 
 **Server:**
 
@@ -139,20 +147,16 @@ app.get('/data', (_req, res) => res.json({ premium: 'content' }))
 ```ts
 import { payingFetch } from '@magicblock-labs/hyperpay/x402'
 
+await hp.openSession(merchant, '1 USDC')
 const fetch = payingFetch({ hp: HyperPay.fromEnv(), maxPrice: '0.05 USDC' })
-const res = await fetch('https://api.example.com/data')   // pays and retries automatically
+const res = await fetch('https://api.example.com/data')   // identifies the user; merchant charges
 ```
-
-The agent hits the endpoint, gets `402` with a quote, pays on Solana, and retries with proof —
-no API key, no signup, no human. If the rollup USDC balance is short, `pay()` deposits the
-shortfall from the base layer first. Ephemeral-rollup latency is what makes per-request
-payments viable; a base-layer confirmation per API call would not be.
 
 Runnable server + client: [`examples/x402`](examples/x402).
 
 ### 5. React — drop-in checkout
 
-`wallet` is the same shape as `useWallet()` from `@solana/wallet-adapter-react`. Do not pass `{ key }` in the browser.
+`wallet` on `HyperPayProvider` is the same shape as `useWallet()` from `@solana/wallet-adapter-react`. Do not pass `{ key }` in the browser.
 
 ```tsx
 import { useWallet } from '@solana/wallet-adapter-react'
@@ -162,13 +166,15 @@ function Checkout() {
   const wallet = useWallet()
   return (
     <HyperPayProvider cluster="devnet" wallet={wallet}>
-      <PayButton to="alice@magicblock.id" amount="10 USDC" />
+      <PayButton to={merchant} amount="10 USDC" />
     </HyperPayProvider>
   )
 }
 ```
 
-Equivalent if you already have a signer: `signer={walletAdapterSigner(wallet)}` (undefined while disconnected). Install `@magicblock-labs/hyperpay-react` separately; the umbrella does not depend on it.
+`PayButton` calls `openSession`. Equivalent if you already have a signer:
+`signer={walletAdapterSigner(wallet)}` (undefined while disconnected). Install
+`@magicblock-labs/hyperpay-react` separately; the umbrella does not depend on it.
 
 `PayModal` quotes then confirms; `usePay` / `useBalance` cover custom UI. React is a peer dependency and is not bundled.
 
@@ -182,24 +188,24 @@ Node examples need `HYPERPAY_KEY` and `HYPERPAY_CLUSTER=devnet`. The React app t
 
 | Path | What |
 |---|---|
-| [`examples/react`](examples/react) | Vite + React: connect a wallet, then `PayButton` |
-| [`examples/ai-skill`](examples/ai-skill) | Agent skill: set up a signer, spend caps, fund the rollup, quote then pay |
-| [`examples/metered`](examples/metered) | Prepaid metered API — buy forecast tokens, then spend them |
+| [`examples/react`](examples/react) | Vite + React: connect a wallet, then `PayButton` (`openSession`) |
+| [`examples/ai-skill`](examples/ai-skill) | Agent skill: set up a signer, spend caps, open a session, then charge |
+| [`examples/metered`](examples/metered) | Prepaid metered API — open a session, then spend reserved units |
 | [`examples/x402`](examples/x402) | Paid HTTP resource — `Paywall` server and `payingFetch` client |
-| [`examples/openrouter`](examples/openrouter) | OpenRouter proxy — users pay from ephemeral USDC; `npx vitest run examples/openrouter/e2e.test.ts` is a full loop against a mock upstream |
+| [`examples/openrouter`](examples/openrouter) | OpenRouter proxy — users open a session; `npx vitest run examples/openrouter/e2e.test.ts` is a full loop against a mock upstream |
 
 ---
 
 ## Agent safety
 
 Never give an agent your main wallet. Give it a **session key** funded with a bounded amount,
-and set caps:
+and set caps. When the signer is a session key, pass `authority` (the wallet that owns the User PDA):
 
 ```sh
 HYPERPAY_KEY=<session keypair>
 HYPERPAY_MAX_PER_TX="25 USDC"
 HYPERPAY_DAILY_CAP="200 USDC"
-HYPERPAY_ALLOW="alice@magicblock.id,*.vendor.id"
+HYPERPAY_ALLOW="<merchant pubkey>"
 ```
 
 Every payment is checked **before anything is signed**, so a rejected payment leaves no
@@ -214,17 +220,14 @@ is refused rather than waved through.
 
 ---
 
-## What "private" means here
+## Sessions on the ephemeral rollup
 
-Quoting MagicBlock's own caveat, because it matters: privacy here reduces **linkability**, not
-total observability. Amounts and timing may still be inferable at the network level.
+`openSession`, `deposit`, `charge`, `closeSession`, and `withdraw` land on the MagicBlock
+ephemeral rollup (eSPL). `initUser` / `fundUser` land on the base cluster (lamports into the
+User PDA). Token top-up into the User eATA is outside this SDK.
 
-- Private transfers cost **0.1%** in the token itself.
-- Gasless mode has a flat **0.2 USDC/USDT** relay fee and a **0.5** minimum transfer.
-- `split` and `delayMs` weaken amount and timing correlation.
-- Private transfers settle through a queue, so they can land **seconds after** `pay()` returns.
-- Stealth handles (`alice@magicblock.id`) require the recipient to have initialized a stealth
-  pool first, otherwise the API rejects the transfer.
+Amounts and timing on the rollup may still be inferable at the network level. Privacy here
+reduces **linkability**, not total observability.
 
 ---
 
@@ -236,10 +239,14 @@ hyperpay = { path = "crates/hyperpay" }
 ```
 
 ```rust
-use hyperpay::{HyperPay, PayOptions};
+use hyperpay::HyperPay;
 
-let hp = HyperPay::from_env()?;
-let payment = hp.pay("alice@magicblock.id", "10 USDC", PayOptions::default()).await?;
+let user = HyperPay::from_env()?;
+user.init_user(1_000_000).await?;
+user.open_session(merchant, "10 USDC", None, None).await?;
+
+let merchant = HyperPay::from_env()?;
+let payment = merchant.charge(&user_wallet, "1 USDC").await?;
 println!("{}", payment.signature);
 ```
 
@@ -260,7 +267,7 @@ const hp = new HyperPay({
   defaultToken: 'TEST',
   policy: { maxPerTx: '5 TEST' },
 })
-await hp.initializeMint()   // register the mint with the ephemeral validator, once
+await hp.openSession(merchant, '5 TEST')
 ```
 
 ---
@@ -269,6 +276,7 @@ await hp.initializeMint()   // register the mint with the ephemeral validator, o
 
 ```sh
 npm test          # unit tests (amounts, policy, x402, react, tree-shake), no network
+just test-program # Anchor program tests (reservation math + LiteSVM)
 npm run test:live # MCP server driven over stdio by a real MCP client
 npm run test:e2e  # real payments on live devnet
 ```
@@ -286,7 +294,7 @@ run them.
 | `HYPERPAY_KEY` | Secret key: base58, JSON byte array, or file path |
 | `HYPERPAY_CLUSTER` | `mainnet`, `devnet`, or an RPC URL |
 | `HYPERPAY_RPC` | Override the base-layer RPC |
-| `HYPERPAY_API` | Override the payments API base URL |
+| `HYPERPAY_EPHEMERAL_RPC` | Override the ephemeral-rollup RPC |
 | `HYPERPAY_TOKEN` | Default token symbol (default `USDC`) |
 | `HYPERPAY_TOKENS` | Custom mints, `SYMBOL:MINT:DECIMALS,…` |
 | `HYPERPAY_MAX_PER_TX` | Per-transaction cap, e.g. `"25 USDC"` |
@@ -294,17 +302,16 @@ run them.
 | `HYPERPAY_ALLOW` / `HYPERPAY_DENY` | Recipient patterns, `*` wildcards |
 | `HYPERPAY_JOURNAL` | Where daily spend is recorded |
 
-**Errors** are typed: `PolicyError`, `ApiError`, `ConfirmationError`, `ResolutionError`,
-`SignerError` — all extending `HyperPayError`.
+**Errors** are typed: `PolicyError`, `ApiError` (JSON-RPC), `ConfirmationError`,
+`ResolutionError`, `SignerError` — all extending `HyperPayError`.
 
 ---
 
 ## Dependencies and trust
 
-HyperPay talks to `https://payments.magicblock.app`, a hosted service operated by MagicBlock. It
-builds your transactions; it never holds your keys, and you sign everything locally. Point
-`HYPERPAY_API` elsewhere if you run your own. Because HyperPay uses the REST API rather than the
-on-chain SDK, it is insulated from the `0.14.x` legacy-vault vs `0.15.x` idempotent-shuttle split.
+HyperPay talks to the on-chain program
+(`Adyo1eYuP8deoLxwgkvaomUYvAUKUGryh4RGpdTR9YhU`) and the RPCs you configure. It
+never holds your keys; you sign everything locally.
 
 ## Publishing
 

@@ -7,4 +7,5 @@ import { expressPaywall, payingFetch } from '@magicblock-labs/hyperpay-x402'
 import { HyperPay } from '@magicblock-labs/hyperpay-core'
 
 const hp = HyperPay.fromEnv() // Node-only
+// User must hp.openSession(merchant, amount) before the merchant can charge.
 ```

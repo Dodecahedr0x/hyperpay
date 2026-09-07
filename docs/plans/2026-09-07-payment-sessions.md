@@ -143,8 +143,8 @@ resolver = "2"
 members = ["crates/hyperpay", "programs/hyperpay"]
 
 [workspace.dependencies]
-anchor-lang = "0.31.1"
-anchor-spl = "0.31.1"
+anchor-lang = "1.2.0"
+anchor-spl = "1.2.0"
 ```
 
 `programs/hyperpay/Cargo.toml`:
@@ -177,7 +177,7 @@ session-keys = { version = "3.1.1", features = ["no-entrypoint"] }
 
 ```toml
 [toolchain]
-anchor_version = "0.31.1"
+anchor_version = "1.2.0"
 
 [features]
 resolution = true
@@ -202,7 +202,7 @@ Run: `cargo test -p hyperpay-program --lib accounting::tests -- --nocapture`
 
 Expected: FAIL compiling or linking until the crate is a workspace member, then PASS for accounting (the test file is the implementation). First run after adding `lib.rs` without `mod accounting;` should fail with `cannot find type`. Add `mod accounting;` then tests PASS.
 
-If Anchor 0.31 vs session-keys / ephemeral-rollups-sdk fail to resolve, drop to the versions those crates declare and record them in this file.
+Workspace pins Anchor 1.2.0 so it matches session-keys 3.1.1 and ephemeral-rollups-sdk 0.16.2. Do not reintroduce 0.31.
 
 **Step 4: Generate a real program id**
 
@@ -236,7 +236,7 @@ EOF
 
 **Step 1: Write the failing LiteSVM test**
 
-`programs/hyperpay/tests/init_user.rs` — add `litesvm` + `litesvm-loader` or use `solana-program-test`. Prefer LiteSVM if it compiles with Anchor 0.31; otherwise `anchor_lang::solana_program` + `solana-program-test`.
+`programs/hyperpay/tests/init_user.rs` — add `litesvm` + `litesvm-loader` or use `solana-program-test`. Prefer LiteSVM if it compiles with Anchor 1.2.0; otherwise `solana-program-test`.
 
 The test must:
 

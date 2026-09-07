@@ -11,7 +11,7 @@ import { PayButton } from '@magicblock-labs/hyperpay-react'
 import { memoryJournal, fileJournal } from '@magicblock-labs/hyperpay/core'
 ```
 
-`memoryJournal` and `fileJournal` are not on the umbrella root. `fromEnv()` and `{ key }` are Node-only; in the browser pass `{ signer }` or `{ wallet }`.
+`memoryJournal` and `fileJournal` are not on the umbrella root. `fromEnv()` and `{ key }` are Node-only; in the browser pass `{ signer }`. `HyperPayProvider` accepts `wallet` (wallet-adapter shape).
 
 ## Publishing
 

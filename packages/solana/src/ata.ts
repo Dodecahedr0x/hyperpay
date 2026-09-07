@@ -56,7 +56,7 @@ export function ensureRecipientAta(
   recipient: string,
   mint: string,
 ): Transaction {
-  if (!BASE58.test(recipient)) return tx // a stealth handle has no derivable ATA
+  if (!BASE58.test(recipient)) return tx // not a pubkey — cannot derive an ATA
 
   const tokenProgram =
     tx.instructions.find((ix) => ix.programId.equals(TOKEN_2022_PROGRAM_ID))

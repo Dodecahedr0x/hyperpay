@@ -1,6 +1,8 @@
 # HyperPay agent skill
 
-Teaches an agent to set up a HyperPay signer, apply spend caps, fund the ephemeral rollup, and pay (quote first). The instructions are in `SKILL.md`.
+Teaches an agent to set up a HyperPay signer, apply spend caps, open a payment
+session (`initUser` / `openSession`), and let a merchant `charge`. The
+instructions are in `SKILL.md`.
 
 Install by copying this folder:
 
