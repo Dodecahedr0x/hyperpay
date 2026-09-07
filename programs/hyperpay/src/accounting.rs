@@ -78,4 +78,14 @@ mod tests {
     fn debit_decrements() {
         assert_eq!(debit_remaining(50, 20), Ok(30));
     }
+
+    #[test]
+    fn available_saturates_when_reserved_exceeds_balance() {
+        assert_eq!(available(100, 150), 0);
+    }
+
+    #[test]
+    fn debit_rejects_zero() {
+        assert_eq!(debit_remaining(50, 0), Err(AccountingError::AmountZero));
+    }
 }

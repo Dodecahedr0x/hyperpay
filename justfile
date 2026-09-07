@@ -1,4 +1,4 @@
-# npm workspace + crates/hyperpay
+# npm workspace + Rust workspace (SDK + program)
 set dotenv-load := true
 
 crate := "crates/hyperpay"
@@ -11,9 +11,9 @@ default:
 test:
     npm test
 
-# Rust unit tests
+# Rust SDK unit tests
 test-rs:
-    cargo test --manifest-path {{crate}}/Cargo.toml
+    cargo test -p hyperpay
 
 # Anchor program unit tests (reservation math)
 test-program:
@@ -23,8 +23,8 @@ test-program:
 build-program:
     cargo build -p hyperpay-program
 
-# JS + Rust unit tests
-test-all: test test-rs
+# JS + Rust unit tests (SDK + program)
+test-all: test test-rs test-program
 
 # Dist-build smoke tests
 test-dist:
@@ -40,14 +40,16 @@ test-e2e:
 
 # rustfmt (write)
 fmt:
-    cargo fmt --manifest-path {{crate}}/Cargo.toml --all
+    cargo fmt --all
 
 # rustfmt --check
 fmt-check:
-    cargo fmt --manifest-path {{crate}}/Cargo.toml --all -- --check
+    cargo fmt --all -- --check
 
-# clippy, warnings as errors
+# clippy, warnings as errors. SDK keeps its existing invocation (pre-existing
+# dead_code / await_holding_lock). Program is denied separately.
 clippy:
+    cargo clippy -p hyperpay-program --all-targets -- -D warnings
     cargo clippy --manifest-path {{crate}}/Cargo.toml --all-targets --all-features -- -D warnings
 
 # rustfmt --check + clippy

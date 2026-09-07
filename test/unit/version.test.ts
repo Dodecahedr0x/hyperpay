@@ -20,6 +20,7 @@ function fixture() {
   const dir = mkdtempSync(join(tmpdir(), 'hyperpay-version-'))
   mkdirSync(join(dir, 'packages/core'), { recursive: true })
   mkdirSync(join(dir, 'crates/hyperpay'), { recursive: true })
+  mkdirSync(join(dir, 'programs/hyperpay'), { recursive: true })
   writeFileSync(join(dir, 'package.json'), `${JSON.stringify({ version: '1.2.3' }, null, 2)}\n`)
   writeFileSync(
     join(dir, 'packages/core/package.json'),
@@ -30,8 +31,12 @@ function fixture() {
     `[package]\nname = "hyperpay"\nversion = "0.0.1"\nedition = "2021"\n`,
   )
   writeFileSync(
-    join(dir, 'crates/hyperpay/Cargo.lock'),
-    `[[package]]\nname = "hyperpay"\nversion = "0.0.1"\n`,
+    join(dir, 'programs/hyperpay/Cargo.toml'),
+    `[package]\nname = "hyperpay-program"\nversion = "0.0.1"\nedition = "2021"\n`,
+  )
+  writeFileSync(
+    join(dir, 'Cargo.lock'),
+    `[[package]]\nname = "hyperpay"\nversion = "0.0.1"\n\n[[package]]\nname = "hyperpay-program"\nversion = "0.0.1"\n`,
   )
   writeFileSync(
     join(dir, 'package-lock.json'),
@@ -78,7 +83,11 @@ describe('scripts/version.mjs', () => {
     expect(run(['check'], dir).status).toBe(0)
     expect(JSON.parse(readFileSync(join(dir, 'packages/core/package.json'), 'utf8')).version).toBe('1.2.3')
     expect(readFileSync(join(dir, 'crates/hyperpay/Cargo.toml'), 'utf8')).toMatch(/version = "1\.2\.3"/)
-    expect(readFileSync(join(dir, 'crates/hyperpay/Cargo.lock'), 'utf8')).toMatch(/version = "1\.2\.3"/)
+    expect(readFileSync(join(dir, 'programs/hyperpay/Cargo.toml'), 'utf8')).toMatch(/version = "1\.2\.3"/)
+    expect(readFileSync(join(dir, 'Cargo.lock'), 'utf8')).toMatch(/name = "hyperpay"\nversion = "1\.2\.3"/)
+    expect(readFileSync(join(dir, 'Cargo.lock'), 'utf8')).toMatch(
+      /name = "hyperpay-program"\nversion = "1\.2\.3"/,
+    )
     expect(JSON.parse(readFileSync(join(dir, 'package-lock.json'), 'utf8')).version).toBe('1.2.3')
   })
 
