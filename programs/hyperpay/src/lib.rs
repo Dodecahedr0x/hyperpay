@@ -37,6 +37,11 @@ pub(crate) fn apply_close_session(user_mint: &mut UserMint, session: &mut Sessio
     Ok(())
 }
 
+pub(crate) fn apply_close_missing_user_mint(session: &Session) -> Result<()> {
+    require!(session.remaining == 0, HyperpayError::Overflow);
+    Ok(())
+}
+
 fn store_program_account<T: AccountSerialize>(info: &AccountInfo, value: &T) -> Result<()> {
     let mut data = info.try_borrow_mut_data()?;
     value.try_serialize(&mut &mut data[..])
@@ -198,14 +203,21 @@ pub mod hyperpay {
     }
 
     pub fn close_session(ctx: Context<CloseSession>) -> Result<()> {
-        let mut user_mint =
-            load_program_account::<UserMint>(&ctx.accounts.user_mint.to_account_info())?;
         let mut session = load_program_account::<Session>(&ctx.accounts.session.to_account_info())?;
-        require_keys_eq!(user_mint.user, ctx.accounts.user.key());
-        require_keys_eq!(user_mint.mint, ctx.accounts.mint.key());
         require_keys_eq!(session.user, ctx.accounts.user.key());
         require_keys_eq!(session.merchant, ctx.accounts.merchant.key());
         require_keys_eq!(session.mint, ctx.accounts.mint.key());
+
+        if is_uninitialized(&ctx.accounts.user_mint.to_account_info())? {
+            apply_close_missing_user_mint(&session)?;
+            ctx.accounts.close_ephemeral_session()?;
+            return Ok(());
+        }
+
+        let mut user_mint =
+            load_program_account::<UserMint>(&ctx.accounts.user_mint.to_account_info())?;
+        require_keys_eq!(user_mint.user, ctx.accounts.user.key());
+        require_keys_eq!(user_mint.mint, ctx.accounts.mint.key());
 
         apply_close_session(&mut user_mint, &mut session)?;
         store_program_account(&ctx.accounts.user_mint.to_account_info(), &user_mint)?;
@@ -538,5 +550,17 @@ mod apply_deposit_tests {
         let mut user_mint = user_mint(20);
         let mut session = session(30);
         assert!(apply_close_session(&mut user_mint, &mut session).is_err());
+    }
+
+    #[test]
+    fn apply_close_missing_user_mint_allows_zero_remaining() {
+        let session = session(0);
+        apply_close_missing_user_mint(&session).unwrap();
+    }
+
+    #[test]
+    fn apply_close_missing_user_mint_rejects_remaining() {
+        let session = session(30);
+        assert!(apply_close_missing_user_mint(&session).is_err());
     }
 }
