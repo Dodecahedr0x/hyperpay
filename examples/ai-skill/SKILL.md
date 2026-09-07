@@ -18,6 +18,9 @@ Typical flow: `initUser` → `delegateUser` → `topUp` →
 **Always quote, then open or charge.** Never invent methods (`pay`, `waitForCredit`,
 `InsufficientFundsError` — they do not exist). There is no hosted Payments API.
 
+If you are working in the hyperpay git repo: `AGENTS.md` maps the codebase;
+`docs/reference.md` is the generated CLI / MCP / SDK surface.
+
 ## 1. Signer
 
 Create a **session keypair**, not the user's main wallet. JSON byte array is the common format:
@@ -76,6 +79,8 @@ a system transfer or eSPL-sponsored. Token balance lives in the User eATA
 npx @magicblock-labs/hyperpay address
 npx @magicblock-labs/hyperpay balance
 npx @magicblock-labs/hyperpay init-user 1000000
+npx @magicblock-labs/hyperpay delegate-user
+npx @magicblock-labs/hyperpay top-up "10 USDC"
 npx @magicblock-labs/hyperpay open-session <merchant> "10 USDC"
 ```
 

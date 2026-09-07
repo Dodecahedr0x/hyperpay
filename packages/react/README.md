@@ -20,4 +20,4 @@ function Checkout() {
 // Equivalent: signer={walletAdapterSigner(wallet)} — undefined while disconnected
 ```
 
-`PayModal`, `PaymentStatus`, `usePay`, and `useBalance` cover custom UI. Runnable app: [`examples/react`](../../examples/react).
+`PayModal`, `PaymentStatus`, `usePay`, and `useBalance` cover custom UI. Runnable app: [`examples/react`](../../examples/react). Canonical surface: [`docs/reference.md`](../../docs/reference.md).

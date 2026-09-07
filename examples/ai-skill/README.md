@@ -13,3 +13,6 @@ cp -R examples/ai-skill .claude/skills/hyperpay          # Claude Code, this rep
 ```
 
 No extra runtime — payments go through `@magicblock-labs/hyperpay`.
+
+Contributing to this repo: [`AGENTS.md`](../../AGENTS.md). Full API surface:
+[`docs/reference.md`](../../docs/reference.md).

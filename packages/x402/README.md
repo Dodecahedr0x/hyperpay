@@ -9,3 +9,5 @@ import { HyperPay } from '@magicblock-labs/hyperpay-core'
 const hp = HyperPay.fromEnv() // Node-only
 // User must hp.openSession(merchant, amount) before the merchant can charge.
 ```
+
+Canonical surface: [`docs/reference.md`](../../docs/reference.md).

@@ -40,3 +40,5 @@ so the User PDA is derived from the wallet that owns it.
 
 `quote` policy-checks without sending. `balance` reads the base-layer ATA.
 Daily spend caps journal to `~/.hyperpay/spend.json` (override with `HYPERPAY_JOURNAL`).
+
+Canonical surface: [`docs/reference.md`](../../docs/reference.md).

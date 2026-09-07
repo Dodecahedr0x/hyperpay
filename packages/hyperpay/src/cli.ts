@@ -35,10 +35,13 @@ ENVIRONMENT
   HYPERPAY_CLUSTER        Default cluster
   HYPERPAY_RPC            Base-layer RPC override
   HYPERPAY_EPHEMERAL_RPC  Ephemeral-rollup RPC override
+  HYPERPAY_TOKEN          Default token symbol (default USDC)
+  HYPERPAY_TOKENS         Custom mints, e.g. "TEST:<mint>:6"
   HYPERPAY_MAX_PER_TX     Per-transaction spend cap, e.g. "25 USDC"
   HYPERPAY_DAILY_CAP      Daily spend cap
   HYPERPAY_ALLOW          Comma-separated recipient allow list
-  HYPERPAY_TOKENS         Custom mints, e.g. "TEST:<mint>:6"
+  HYPERPAY_DENY           Comma-separated deny list (checked first)
+  HYPERPAY_JOURNAL        Daily spend journal path
 
 EXAMPLES
   hyperpay open-session 9WzD...AWWM "10 USDC"

@@ -24,6 +24,8 @@
     "test:e2e": "vitest run test/e2e/payment.e2e.test.ts test/e2e/x402.e2e.test.ts examples/openrouter --testTimeout=300000",
     "test:e2e:local": "vitest run test/e2e/mb-stack.e2e.test.ts --testTimeout=300000",
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "docs": "node scripts/docs.mjs write",
+    "docs:check": "node scripts/docs.mjs check",
     "publish:packages": "npm publish -ws --access public"
   },
   "devDependencies": {

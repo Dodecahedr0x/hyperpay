@@ -13,6 +13,8 @@ import { memoryJournal, fileJournal } from '@magicblock-labs/hyperpay/core'
 
 `memoryJournal` and `fileJournal` are not on the umbrella root. `fromEnv()` and `{ key }` are Node-only; in the browser pass `{ signer }`. `HyperPayProvider` accepts `wallet` (wallet-adapter shape).
 
+Canonical surface: [`docs/reference.md`](../../docs/reference.md). Agent map: [`AGENTS.md`](../../AGENTS.md).
+
 ## Publishing
 
 Bump every `packages/*/package.json` version together, then `npm run build && npm run typecheck && npm test && npm run publish:packages`. Internal deps use `*` (npm workspaces have no `workspace:` protocol) so lockstep publishes do not 404. Do not publish one package without the others.

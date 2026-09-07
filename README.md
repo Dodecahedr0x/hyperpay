@@ -6,6 +6,9 @@ Payment sessions on Solana. A user opens a session with a merchant; the merchant
 
 Program id: `Adyo1eYuP8deoLxwgkvaomUYvAUKUGryh4RGpdTR9YhU`
 
+Coding in this repo: [`AGENTS.md`](AGENTS.md). Canonical API surface
+(generated from source — do not edit): [`docs/reference.md`](docs/reference.md).
+
 ```ts
 import { HyperPay } from '@magicblock-labs/hyperpay'
 
@@ -108,12 +111,18 @@ session token to a merchant `charge`.
 ```sh
 npx @magicblock-labs/hyperpay init-user 1000000
 npx @magicblock-labs/hyperpay delegate-user
+npx @magicblock-labs/hyperpay top-up "10 USDC"
 npx @magicblock-labs/hyperpay open-session <merchant> "10 USDC"
+npx @magicblock-labs/hyperpay deposit <merchant> "2 USDC"
 npx @magicblock-labs/hyperpay charge <user> "1 USDC"
 npx @magicblock-labs/hyperpay session-balance <user>
 npx @magicblock-labs/hyperpay close-session <merchant>
 npx @magicblock-labs/hyperpay withdraw "5 USDC"
+npx @magicblock-labs/hyperpay address
+npx @magicblock-labs/hyperpay balance
 ```
+
+Full command, MCP, env, and SDK lists: [`docs/reference.md`](docs/reference.md).
 
 ### 3. MCP — give an agent a wallet
 
@@ -287,8 +296,9 @@ await hp.openSession(merchant, '5 TEST')
 ## Testing
 
 ```sh
-npm test               # unit tests (amounts, policy, x402, react, tree-shake), no network
+npm test               # unit tests (amounts, policy, x402, react, tree-shake, docs), no network
 just test-program      # Anchor program tests (reservation math + LiteSVM)
+just docs-check        # fail if docs/reference.md or hand-written docs drifted
 npm run test:live      # MCP server driven over stdio by a real MCP client
 npm run test:e2e       # real payments on live devnet
 npm run test:e2e:local # spins up mb-stack and hits the TS + Rust SDKs
@@ -302,6 +312,9 @@ devnet needs `E2E_PAYER_KEY`, `E2E_PAYEE` and `E2E_MINT`. Local needs `mb-stack`
 
 ## Reference
 
+Generated, exhaustive lists (CLI, MCP, SDK methods, program instructions):
+[`docs/reference.md`](docs/reference.md). Agent onboarding: [`AGENTS.md`](AGENTS.md).
+
 | Variable | Meaning |
 |---|---|
 | `HYPERPAY_KEY` | Secret key: base58, JSON byte array, or file path |
@@ -314,6 +327,7 @@ devnet needs `E2E_PAYER_KEY`, `E2E_PAYEE` and `E2E_MINT`. Local needs `mb-stack`
 | `HYPERPAY_DAILY_CAP` | Rolling UTC-day cap |
 | `HYPERPAY_ALLOW` / `HYPERPAY_DENY` | Recipient patterns, `*` wildcards |
 | `HYPERPAY_JOURNAL` | Where daily spend is recorded |
+| `HYPERPAY_AUTHORITY` | Rust example: wallet that owns the User PDA when the signer is a session key |
 
 **Errors** are typed: `PolicyError`, `ApiError` (JSON-RPC), `ConfirmationError`,
 `ResolutionError`, `SignerError` — all extending `HyperPayError`.

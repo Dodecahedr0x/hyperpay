@@ -110,5 +110,13 @@ publish-dry tag="":
     just publish-dry-crate
     just publish-dry-npm
 
-# Local gate: typecheck, unit tests, fmt, clippy
-check: typecheck test-all lint
+# Local gate: typecheck, unit tests, fmt, clippy, docs freshness
+check: typecheck test-all lint docs-check
+
+# Regenerate docs/reference.md from program / SDK / CLI / MCP source
+docs:
+    node scripts/docs.mjs write
+
+# Fail if docs/reference.md is stale or hand-written docs drifted
+docs-check:
+    node scripts/docs.mjs check
