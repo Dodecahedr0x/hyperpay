@@ -39,6 +39,24 @@ pub mod hyperpay {
         )?;
         Ok(())
     }
+
+    pub fn fund_user(ctx: Context<FundUser>, lamports: u64) -> Result<()> {
+        require!(lamports > 0, HyperpayError::AmountZero);
+        let ix = anchor_lang::solana_program::system_instruction::transfer(
+            &ctx.accounts.authority.key(),
+            &ctx.accounts.user.key(),
+            lamports,
+        );
+        anchor_lang::solana_program::program::invoke(
+            &ix,
+            &[
+                ctx.accounts.authority.to_account_info(),
+                ctx.accounts.user.to_account_info(),
+                ctx.accounts.system_program.to_account_info(),
+            ],
+        )?;
+        Ok(())
+    }
 }
 
 #[derive(Accounts)]
@@ -52,6 +70,20 @@ pub struct InitUser<'info> {
         space = 8 + User::INIT_SPACE,
         seeds = [USER_SEED, authority.key().as_ref()],
         bump
+    )]
+    pub user: Account<'info, User>,
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct FundUser<'info> {
+    #[account(
+        mut,
+        seeds = [USER_SEED, authority.key().as_ref()],
+        bump = user.bump,
+        has_one = authority
     )]
     pub user: Account<'info, User>,
     #[account(mut)]

@@ -23,6 +23,10 @@ test-program:
 build-program:
     cargo build -p hyperpay-program
 
+# Build the SBF .so that LiteSVM integration tests load
+build-sbf:
+    cargo-build-sbf --manifest-path programs/hyperpay/Cargo.toml
+
 # JS + Rust unit tests (SDK + program)
 test-all: test test-rs test-program
 
