@@ -51,6 +51,7 @@ pub async fn sign_and_submit(
     keypair: &Keypair,
     rpc_url: &str,
     settled_on: &str,
+    skip_preflight: bool,
 ) -> Result<SubmitResult> {
     let me = keypair.pubkey();
     let message_bytes = tx.message.serialize();
@@ -80,7 +81,14 @@ pub async fn sign_and_submit(
         &http,
         rpc_url,
         "sendTransaction",
-        json!([encoded, { "encoding": "base64", "preflightCommitment": "confirmed" }]),
+        json!([
+            encoded,
+            {
+                "encoding": "base64",
+                "skipPreflight": skip_preflight,
+                "preflightCommitment": "confirmed"
+            }
+        ]),
     )
     .await?
     .as_str()
@@ -198,6 +206,40 @@ pub async fn get_account_data(
         .decode(encoded)
         .map(Some)
         .map_err(|e| HyperPayError::Encoding(format!("account data is not valid base64: {e}")))
+}
+
+/// Base-layer Tokenkeg ATA balance. Missing accounts are `0`, matching the TS SDK.
+pub async fn get_token_account_balance(
+    http: &reqwest::Client,
+    rpc_url: &str,
+    ata: &Pubkey,
+) -> Result<u64> {
+    match rpc_call(
+        http,
+        rpc_url,
+        "getTokenAccountBalance",
+        json!([ata.to_string(), { "commitment": "confirmed" }]),
+    )
+    .await
+    {
+        Ok(value) => {
+            let amount = value
+                .get("value")
+                .and_then(|v| v.get("amount"))
+                .and_then(|a| a.as_str())
+                .ok_or_else(|| HyperPayError::Api {
+                    message: "getTokenAccountBalance did not return an amount".into(),
+                    code: None,
+                })?;
+            amount.parse().map_err(|_| {
+                HyperPayError::Encoding(format!(
+                    "getTokenAccountBalance returned a non-integer amount: {amount}"
+                ))
+            })
+        }
+        Err(HyperPayError::Api { .. }) => Ok(0),
+        Err(err) => Err(err),
+    }
 }
 
 pub(crate) async fn rpc_call(

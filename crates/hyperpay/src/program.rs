@@ -15,6 +15,10 @@ pub const MAGIC_PROGRAM_ID: Pubkey =
     solana_sdk::pubkey!("Magic11111111111111111111111111111111111111");
 pub const EPHEMERAL_VAULT_ID: Pubkey =
     solana_sdk::pubkey!("MagicVau1t999999999999999999999999999999999");
+pub const DELEGATION_PROGRAM_ID: Pubkey =
+    solana_sdk::pubkey!("DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh");
+pub const LOCAL_ER_VALIDATOR: Pubkey =
+    solana_sdk::pubkey!("mAGicPQYBMvcYveUZA5F5UNNwyHvfYh5xkLS2Fr1mev");
 
 pub const USER_SEED: &[u8] = b"user";
 pub const USER_MINT_SEED: &[u8] = b"user_mint";
@@ -47,6 +51,32 @@ pub fn session_pda(user: &Pubkey, merchant: &Pubkey, mint: &Pubkey) -> (Pubkey, 
 /// eSPL eATA: `[owner, mint]` on the eSPL token program.
 pub fn eata_pda(owner: &Pubkey, mint: &Pubkey) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[owner.as_ref(), mint.as_ref()], &ESPL_TOKEN_PROGRAM_ID)
+}
+
+/// eSPL global vault PDA: `[mint]` on the eSPL token program.
+pub fn vault_pda(mint: &Pubkey) -> Pubkey {
+    Pubkey::find_program_address(&[mint.as_ref()], &ESPL_TOKEN_PROGRAM_ID).0
+}
+
+/// Delegation buffer PDA: `[b"buffer", eata]` on the eSPL program.
+pub fn espl_delegate_buffer_pda(eata: &Pubkey) -> Pubkey {
+    Pubkey::find_program_address(&[b"buffer", eata.as_ref()], &ESPL_TOKEN_PROGRAM_ID).0
+}
+
+pub fn delegate_buffer_pda(user: &Pubkey) -> Pubkey {
+    Pubkey::find_program_address(&[b"buffer", user.as_ref()], &PROGRAM_ID).0
+}
+
+pub fn delegation_record_pda(user: &Pubkey) -> Pubkey {
+    Pubkey::find_program_address(&[b"delegation", user.as_ref()], &DELEGATION_PROGRAM_ID).0
+}
+
+pub fn delegation_metadata_pda(user: &Pubkey) -> Pubkey {
+    Pubkey::find_program_address(
+        &[b"delegation-metadata", user.as_ref()],
+        &DELEGATION_PROGRAM_ID,
+    )
+    .0
 }
 
 pub fn associated_token_address(owner: &Pubkey, mint: &Pubkey, token_program: &Pubkey) -> Pubkey {
@@ -91,21 +121,24 @@ pub fn init_user_ix(user: Pubkey, authority: Pubkey, lamports: u64) -> Instructi
     }
 }
 
-pub fn fund_user_ix(
-    user: Pubkey,
-    signer: Pubkey,
-    lamports: u64,
-    session_token: Option<Pubkey>,
-) -> Instruction {
+pub fn delegate_user_ix(user: Pubkey, authority: Pubkey, validator: Option<Pubkey>) -> Instruction {
+    let mut accounts = vec![
+        AccountMeta::new(authority, true),
+        AccountMeta::new(delegate_buffer_pda(&user), false),
+        AccountMeta::new(delegation_record_pda(&user), false),
+        AccountMeta::new(delegation_metadata_pda(&user), false),
+        AccountMeta::new(user, false),
+        AccountMeta::new_readonly(PROGRAM_ID, false),
+        AccountMeta::new_readonly(DELEGATION_PROGRAM_ID, false),
+        AccountMeta::new_readonly(Pubkey::default(), false),
+    ];
+    if let Some(validator) = validator {
+        accounts.push(AccountMeta::new_readonly(validator, false));
+    }
     Instruction {
         program_id: PROGRAM_ID,
-        accounts: vec![
-            AccountMeta::new(user, false),
-            AccountMeta::new(signer, true),
-            AccountMeta::new_readonly(Pubkey::default(), false),
-            session_token_meta(session_token),
-        ],
-        data: ix_data("fund_user", Some(lamports)),
+        accounts,
+        data: ix_data("delegate_user", None),
     }
 }
 
@@ -238,6 +271,115 @@ pub fn withdraw_ix(
     }
 }
 
+pub fn ensure_user_mint_ix(
+    user: Pubkey,
+    signer: Pubkey,
+    user_mint: Pubkey,
+    mint: Pubkey,
+    session_token: Option<Pubkey>,
+) -> Instruction {
+    Instruction {
+        program_id: PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new(user, false),
+            AccountMeta::new_readonly(signer, true),
+            AccountMeta::new(user_mint, false),
+            AccountMeta::new_readonly(mint, false),
+            session_token_meta(session_token),
+            AccountMeta::new(EPHEMERAL_VAULT_ID, false),
+            AccountMeta::new_readonly(MAGIC_PROGRAM_ID, false),
+        ],
+        data: ix_data("ensure_user_mint", None),
+    }
+}
+
+pub fn init_global_vault_ix(payer: Pubkey, mint: Pubkey) -> Instruction {
+    let vault = vault_pda(&mint);
+    let (vault_eata, _) = eata_pda(&vault, &mint);
+    let vault_ata = associated_token_address(&vault, &mint, &TOKEN_PROGRAM_ID);
+    Instruction {
+        program_id: ESPL_TOKEN_PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new(vault, false),
+            AccountMeta::new(payer, true),
+            AccountMeta::new_readonly(mint, false),
+            AccountMeta::new(vault_eata, false),
+            AccountMeta::new(vault_ata, false),
+            AccountMeta::new_readonly(TOKEN_PROGRAM_ID, false),
+            AccountMeta::new_readonly(ASSOCIATED_TOKEN_PROGRAM_ID, false),
+            AccountMeta::new_readonly(Pubkey::default(), false),
+        ],
+        data: vec![1],
+    }
+}
+
+pub fn init_ephemeral_ata_ix(payer: Pubkey, owner: Pubkey, mint: Pubkey) -> Instruction {
+    let (eata, _) = eata_pda(&owner, &mint);
+    Instruction {
+        program_id: ESPL_TOKEN_PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new(eata, false),
+            AccountMeta::new(payer, true),
+            AccountMeta::new_readonly(owner, false),
+            AccountMeta::new_readonly(mint, false),
+            AccountMeta::new_readonly(Pubkey::default(), false),
+        ],
+        data: vec![0],
+    }
+}
+
+pub fn deposit_spl_ix(
+    authority: Pubkey,
+    eata_owner: Pubkey,
+    mint: Pubkey,
+    amount: u64,
+) -> Instruction {
+    let (eata, _) = eata_pda(&eata_owner, &mint);
+    let vault = vault_pda(&mint);
+    let source = associated_token_address(&authority, &mint, &TOKEN_PROGRAM_ID);
+    let vault_ata = associated_token_address(&vault, &mint, &TOKEN_PROGRAM_ID);
+    let mut data = vec![2u8];
+    data.extend_from_slice(&amount.to_le_bytes());
+    Instruction {
+        program_id: ESPL_TOKEN_PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new(eata, false),
+            AccountMeta::new_readonly(vault, false),
+            AccountMeta::new_readonly(mint, false),
+            AccountMeta::new(source, false),
+            AccountMeta::new(vault_ata, false),
+            AccountMeta::new_readonly(authority, true),
+            AccountMeta::new_readonly(TOKEN_PROGRAM_ID, false),
+        ],
+        data,
+    }
+}
+
+pub fn delegate_ephemeral_ata_ix(
+    payer: Pubkey,
+    owner: Pubkey,
+    mint: Pubkey,
+    validator: Option<Pubkey>,
+) -> Instruction {
+    let (eata, _) = eata_pda(&owner, &mint);
+    let mut data = vec![4u8];
+    data.extend_from_slice(validator.unwrap_or(LOCAL_ER_VALIDATOR).as_ref());
+    Instruction {
+        program_id: ESPL_TOKEN_PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new(payer, true),
+            AccountMeta::new(eata, false),
+            AccountMeta::new_readonly(ESPL_TOKEN_PROGRAM_ID, false),
+            AccountMeta::new(espl_delegate_buffer_pda(&eata), false),
+            AccountMeta::new(delegation_record_pda(&eata), false),
+            AccountMeta::new(delegation_metadata_pda(&eata), false),
+            AccountMeta::new_readonly(DELEGATION_PROGRAM_ID, false),
+            AccountMeta::new_readonly(Pubkey::default(), false),
+        ],
+        data,
+    }
+}
+
 pub fn remaining_from_session_data(data: &[u8]) -> Option<u64> {
     let end = SESSION_REMAINING_OFFSET + 8;
     if data.len() < end {
@@ -343,19 +485,47 @@ mod tests {
     }
 
     #[test]
-    fn fund_user_ix_uses_program_id_for_missing_session_token() {
-        let signer = Pubkey::new_unique();
-        let (user, _) = user_pda(&signer);
-        let ix = fund_user_ix(user, signer, 500_000, None);
-        assert_eq!(&ix.data[..8], &sighash("fund_user"));
-        assert_eq!(ix.accounts[3].pubkey, PROGRAM_ID);
-    }
-
-    #[test]
     fn remaining_from_session_data_reads_offset_104() {
         let mut data = vec![0u8; 113];
         data[104..112].copy_from_slice(&42_000u64.to_le_bytes());
         assert_eq!(remaining_from_session_data(&data), Some(42_000));
         assert_eq!(remaining_from_session_data(&data[..10]), None);
+    }
+
+    #[test]
+    fn ensure_user_mint_ix_includes_vault_and_magic_program() {
+        let authority = Pubkey::new_unique();
+        let (user, _) = user_pda(&authority);
+        let mint = Pubkey::new_unique();
+        let (user_mint, _) = user_mint_pda(&user, &mint);
+        let ix = ensure_user_mint_ix(user, authority, user_mint, mint, None);
+        assert_eq!(&ix.data[..8], &sighash("ensure_user_mint"));
+        assert_eq!(ix.accounts[0].pubkey, user);
+        assert!(ix.accounts[0].is_writable);
+        assert_eq!(ix.accounts[1].pubkey, authority);
+        assert!(ix.accounts[1].is_signer);
+        assert_eq!(ix.accounts[2].pubkey, user_mint);
+        assert_eq!(ix.accounts[3].pubkey, mint);
+        assert_eq!(ix.accounts[4].pubkey, PROGRAM_ID);
+        assert_eq!(ix.accounts[5].pubkey, EPHEMERAL_VAULT_ID);
+        assert_eq!(ix.accounts[6].pubkey, MAGIC_PROGRAM_ID);
+    }
+
+    #[test]
+    fn delegate_user_ix_includes_delegation_pdas_and_local_validator() {
+        let authority = Pubkey::new_unique();
+        let (user, _) = user_pda(&authority);
+        let ix = delegate_user_ix(user, authority, Some(LOCAL_ER_VALIDATOR));
+        assert_eq!(ix.program_id, PROGRAM_ID);
+        assert_eq!(&ix.data[..8], &sighash("delegate_user"));
+        assert_eq!(ix.accounts[0].pubkey, authority);
+        assert!(ix.accounts[0].is_signer);
+        assert_eq!(ix.accounts[1].pubkey, delegate_buffer_pda(&user));
+        assert_eq!(ix.accounts[2].pubkey, delegation_record_pda(&user));
+        assert_eq!(ix.accounts[3].pubkey, delegation_metadata_pda(&user));
+        assert_eq!(ix.accounts[4].pubkey, user);
+        assert_eq!(ix.accounts[5].pubkey, PROGRAM_ID);
+        assert_eq!(ix.accounts[6].pubkey, DELEGATION_PROGRAM_ID);
+        assert_eq!(ix.accounts.last().unwrap().pubkey, LOCAL_ER_VALIDATOR);
     }
 }

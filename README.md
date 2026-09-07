@@ -233,24 +233,34 @@ reduces **linkability**, not total observability.
 
 ## Rust
 
+Same client as the TypeScript SDK, for scripts and services. It talks to the
+program over JSON-RPC — no `solana-client`, no hosted payments API.
+
 ```toml
 [dependencies]
 hyperpay = { path = "crates/hyperpay" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```
 
 ```rust
-use hyperpay::HyperPay;
+use hyperpay::{HyperPay, SessionOpts};
 
 let user = HyperPay::from_env()?;
 user.init_user(1_000_000).await?;
-user.open_session(merchant, "10 USDC", None, None).await?;
+user.delegate_user(None).await?;
+user.top_up("10 USDC", SessionOpts::default()).await?;
+user.open_session(merchant, "10 USDC", SessionOpts::default()).await?;
 
 let merchant = HyperPay::from_env()?;
+let _ = merchant.quote(&user_wallet, "1 USDC", None)?;
 let payment = merchant.charge(&user_wallet, "1 USDC").await?;
 println!("{}", payment.signature);
 ```
 
-The Rust crate deliberately avoids `solana-client`, using two plain JSON-RPC calls instead, which
+`cargo run -p hyperpay --example pay -- open <merchant> "1 USDC"` is the script form.
+When the signer is a session key, set `HYPERPAY_AUTHORITY` to the wallet that owns the User PDA.
+
+The crate avoids `solana-client`, using two plain JSON-RPC calls instead, which
 keeps the dependency tree and compile time small.
 
 ---

@@ -4,6 +4,7 @@ version = "0.1.2"
 edition = "2021"
 license = "MIT"
 description = "The easiest way to pay on Solana. Private, instant, agent-ready — built on MagicBlock ephemeral rollups and eSPL."
+readme = "README.md"
 repository = "https://github.com/magicblock-labs/hyperpay"
 homepage = "https://github.com/magicblock-labs/hyperpay"
 keywords = ["solana", "payments", "privacy", "magicblock", "espl"]
