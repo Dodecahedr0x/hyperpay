@@ -11,15 +11,15 @@ import { HyperPay } from '@magicblock-labs/hyperpay'
 
 const user = HyperPay.fromEnv()
 await user.initUser(1_000_000n)
-await user.fundUser(1_000_000n)
-// Top up the User eATA with eSPL outside HyperPay, then:
+await user.delegateUser()
+await user.topUp('10 USDC')
 await user.openSession(merchant, '10 USDC')
 
 const merchantHp = new HyperPay({ key: merchantKey, cluster: 'devnet' })
 await merchantHp.charge(userWallet, '1 USDC')
 ```
 
-Typical flow: `initUser` → `fundUser` → (eSPL top-up outside HyperPay) →
+Typical flow: `initUser` → `delegateUser` → `topUp` →
 `openSession(merchant, amount)` → merchant `charge` → `closeSession` → `withdraw`.
 
 ---
@@ -87,7 +87,6 @@ import { HyperPay } from '@magicblock-labs/hyperpay'
 const user = HyperPay.fromEnv() // Node-only; in the browser pass { signer }
 
 await user.initUser(1_000_000n)
-await user.fundUser(500_000n)
 await user.openSession(merchant, '10 USDC')
 await user.deposit(merchant, '2 USDC')          // reserve more into an open session
 await user.closeSession(merchant)
@@ -108,6 +107,7 @@ session token to a merchant `charge`.
 
 ```sh
 npx @magicblock-labs/hyperpay init-user 1000000
+npx @magicblock-labs/hyperpay delegate-user
 npx @magicblock-labs/hyperpay open-session <merchant> "10 USDC"
 npx @magicblock-labs/hyperpay charge <user> "1 USDC"
 npx @magicblock-labs/hyperpay session-balance <user>
@@ -223,8 +223,10 @@ is refused rather than waved through.
 ## Sessions on the ephemeral rollup
 
 `openSession`, `deposit`, `charge`, `closeSession`, and `withdraw` land on the MagicBlock
-ephemeral rollup (eSPL). `initUser` / `fundUser` land on the base cluster (lamports into the
-User PDA). Token top-up into the User eATA is outside this SDK.
+ephemeral rollup. `initUser` / `delegateUser` land on the base cluster
+(lamports into the User PDA at init, then MagicBlock delegation). Extra lamports
+are a system transfer or eSPL-sponsored. `topUp` deposits wallet ATA tokens into
+the User eATA on base, then creates the ephemeral UserMint if it is missing.
 
 Amounts and timing on the rollup may still be inferable at the network level. Privacy here
 reduces **linkability**, not total observability.
@@ -243,6 +245,8 @@ use hyperpay::HyperPay;
 
 let user = HyperPay::from_env()?;
 user.init_user(1_000_000).await?;
+user.delegate_user(None).await?;
+user.top_up("10 USDC", None, None).await?;
 user.open_session(merchant, "10 USDC", None, None).await?;
 
 let merchant = HyperPay::from_env()?;
@@ -275,15 +279,16 @@ await hp.openSession(merchant, '5 TEST')
 ## Testing
 
 ```sh
-npm test          # unit tests (amounts, policy, x402, react, tree-shake), no network
-just test-program # Anchor program tests (reservation math + LiteSVM)
-npm run test:live # MCP server driven over stdio by a real MCP client
-npm run test:e2e  # real payments on live devnet
+npm test               # unit tests (amounts, policy, x402, react, tree-shake), no network
+just test-program      # Anchor program tests (reservation math + LiteSVM)
+npm run test:live      # MCP server driven over stdio by a real MCP client
+npm run test:e2e       # real payments on live devnet
+npm run test:e2e:local # spins up mb-stack and hits the TS + Rust SDKs
 ```
 
-The e2e suites are not mocked: they build, sign, submit and confirm real transactions on Solana
-devnet and the MagicBlock ephemeral rollup. Set `E2E_PAYER_KEY`, `E2E_PAYEE` and `E2E_MINT` to
-run them.
+The e2e suites are not mocked: they build, sign, submit and confirm real transactions. Live
+devnet needs `E2E_PAYER_KEY`, `E2E_PAYEE` and `E2E_MINT`. Local needs `mb-stack` (`npm i -g
+@magicblock-labs/ephemeral-validator`).
 
 ---
 

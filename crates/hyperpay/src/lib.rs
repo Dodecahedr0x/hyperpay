@@ -32,7 +32,9 @@ pub use client::{load_keypair, Balance, HyperPay, Payment};
 pub use error::{HyperPayError, Result};
 pub use policy::Policy;
 pub use program::{
-    associated_token_address, charge_ix, close_session_ix, deposit_ix, eata_pda, fund_user_ix,
-    init_user_ix, open_session_ix, session_pda, user_mint_pda, user_pda, withdraw_ix,
-    SessionAccounts, WithdrawAccounts, PROGRAM_ID, SESSION_REMAINING_OFFSET,
+    associated_token_address, charge_ix, close_session_ix, delegate_ephemeral_ata_ix,
+    delegate_user_ix, deposit_ix, deposit_spl_ix, eata_pda, ensure_user_mint_ix,
+    init_ephemeral_ata_ix, init_global_vault_ix, init_user_ix, open_session_ix, session_pda,
+    user_mint_pda, user_pda, vault_pda, withdraw_ix, SessionAccounts, WithdrawAccounts,
+    DELEGATION_PROGRAM_ID, LOCAL_ER_VALIDATOR, PROGRAM_ID, SESSION_REMAINING_OFFSET,
 };

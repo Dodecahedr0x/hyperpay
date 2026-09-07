@@ -2,7 +2,8 @@
 
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Transfer};
-use ephemeral_rollups_sdk::anchor::ephemeral_accounts;
+use ephemeral_rollups_sdk::anchor::{delegate, ephemeral_accounts};
+use ephemeral_rollups_sdk::cpi::DelegateConfig;
 use session_keys::{session_auth_or, SessionError, SessionTokenV2};
 
 pub mod accounting;
@@ -87,24 +88,20 @@ pub mod hyperpay {
         Ok(())
     }
 
-    #[session_auth_or(
-        ctx.accounts.signer.key() == ctx.accounts.user.authority,
-        HyperpayError::Unauthorized
-    )]
-    pub fn fund_user(ctx: Context<FundUser>, lamports: u64) -> Result<()> {
-        require!(lamports > 0, HyperpayError::AmountZero);
-        let ix = anchor_lang::solana_program::system_instruction::transfer(
-            &ctx.accounts.signer.key(),
-            &ctx.accounts.user.key(),
-            lamports,
+    pub fn delegate_user(ctx: Context<DelegateUser>) -> Result<()> {
+        let user = load_program_account::<User>(&ctx.accounts.user.to_account_info())?;
+        require_keys_eq!(
+            user.authority,
+            ctx.accounts.authority.key(),
+            HyperpayError::Unauthorized
         );
-        anchor_lang::solana_program::program::invoke(
-            &ix,
-            &[
-                ctx.accounts.signer.to_account_info(),
-                ctx.accounts.user.to_account_info(),
-                ctx.accounts.system_program.to_account_info(),
-            ],
+        ctx.accounts.delegate_user(
+            &ctx.accounts.authority,
+            &[USER_SEED, ctx.accounts.authority.key().as_ref()],
+            DelegateConfig {
+                validator: ctx.remaining_accounts.first().map(|acc| acc.key()),
+                ..DelegateConfig::default()
+            },
         )?;
         Ok(())
     }
@@ -283,6 +280,27 @@ pub mod hyperpay {
         )?;
         Ok(())
     }
+
+    #[session_auth_or(
+        ctx.accounts.signer.key() == ctx.accounts.user.authority,
+        HyperpayError::Unauthorized
+    )]
+    pub fn ensure_user_mint(ctx: Context<EnsureUserMint>) -> Result<()> {
+        ctx.accounts
+            .init_if_needed_ephemeral_user_mint((8 + UserMint::INIT_SPACE) as u32)?;
+        if is_uninitialized(&ctx.accounts.user_mint.to_account_info())? {
+            store_program_account(
+                &ctx.accounts.user_mint.to_account_info(),
+                &UserMint {
+                    user: ctx.accounts.user.key(),
+                    mint: ctx.accounts.mint.key(),
+                    reserved: 0,
+                    bump: ctx.bumps.user_mint,
+                },
+            )?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Accounts)]
@@ -303,19 +321,18 @@ pub struct InitUser<'info> {
     pub system_program: Program<'info, System>,
 }
 
-#[derive(Accounts, session_keys::Session)]
-pub struct FundUser<'info> {
+#[delegate]
+#[derive(Accounts)]
+pub struct DelegateUser<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
     #[account(
         mut,
-        seeds = [USER_SEED, user.authority.as_ref()],
-        bump = user.bump
+        del,
+        seeds = [USER_SEED, authority.key().as_ref()],
+        bump
     )]
-    pub user: Account<'info, User>,
-    #[account(mut)]
-    pub signer: Signer<'info>,
-    pub system_program: Program<'info, System>,
-    #[session(signer = signer, authority = user.authority.key())]
-    pub session_token: Option<Account<'info, SessionTokenV2>>,
+    pub user: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts, session_keys::Session)]
@@ -504,6 +521,31 @@ pub struct Withdraw<'info> {
     )]
     pub destination: Account<'info, TokenAccount>,
     pub token_program: Program<'info, Token>,
+    #[session(signer = signer, authority = user.authority.key())]
+    pub session_token: Option<Account<'info, SessionTokenV2>>,
+}
+
+#[ephemeral_accounts]
+#[derive(Accounts, session_keys::Session)]
+pub struct EnsureUserMint<'info> {
+    #[account(
+        mut,
+        sponsor,
+        seeds = [USER_SEED, user.authority.as_ref()],
+        bump = user.bump
+    )]
+    pub user: Account<'info, User>,
+    pub signer: Signer<'info>,
+    /// CHECK: ephemeral UserMint PDA; created if missing, left as-is otherwise.
+    #[account(
+        mut,
+        eph,
+        seeds = [USER_MINT_SEED, user.key().as_ref(), mint.key().as_ref()],
+        bump
+    )]
+    pub user_mint: UncheckedAccount<'info>,
+    /// CHECK: mint is pinned by UserMint PDA seeds.
+    pub mint: UncheckedAccount<'info>,
     #[session(signer = signer, authority = user.authority.key())]
     pub session_token: Option<Account<'info, SessionTokenV2>>,
 }

@@ -51,6 +51,7 @@ pub async fn sign_and_submit(
     keypair: &Keypair,
     rpc_url: &str,
     settled_on: &str,
+    skip_preflight: bool,
 ) -> Result<SubmitResult> {
     let me = keypair.pubkey();
     let message_bytes = tx.message.serialize();
@@ -80,7 +81,14 @@ pub async fn sign_and_submit(
         &http,
         rpc_url,
         "sendTransaction",
-        json!([encoded, { "encoding": "base64", "preflightCommitment": "confirmed" }]),
+        json!([
+            encoded,
+            {
+                "encoding": "base64",
+                "skipPreflight": skip_preflight,
+                "preflightCommitment": "confirmed"
+            }
+        ]),
     )
     .await?
     .as_str()

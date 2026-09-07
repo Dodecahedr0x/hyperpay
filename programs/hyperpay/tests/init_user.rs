@@ -78,22 +78,6 @@ fn user_pda(wallet: Address) -> (Address, u8) {
     (to_address(pda), bump)
 }
 
-fn fund_user_ix(user: Address, authority: Address, lamports: u64) -> Instruction {
-    let mut data = Vec::with_capacity(16);
-    data.extend_from_slice(&sighash("fund_user"));
-    data.extend_from_slice(&lamports.to_le_bytes());
-    Instruction {
-        program_id: program_id(),
-        accounts: vec![
-            AccountMeta::new(user, false),
-            AccountMeta::new(authority, true),
-            AccountMeta::new_readonly(Address::default(), false),
-            AccountMeta::new_readonly(program_id(), false),
-        ],
-        data,
-    }
-}
-
 fn send_ix(svm: &mut LiteSVM, payer: &Keypair, ix: Instruction) -> Result<(), String> {
     let tx = Transaction::new(
         &[payer],
@@ -108,11 +92,6 @@ fn send_ix(svm: &mut LiteSVM, payer: &Keypair, ix: Instruction) -> Result<(), St
 fn send_init_user(svm: &mut LiteSVM, wallet: &Keypair, lamports: u64) -> Result<(), String> {
     let (user, _) = user_pda(wallet.pubkey());
     send_ix(svm, wallet, init_user_ix(user, wallet.pubkey(), lamports))
-}
-
-fn send_fund_user(svm: &mut LiteSVM, wallet: &Keypair, lamports: u64) -> Result<(), String> {
-    let (user, _) = user_pda(wallet.pubkey());
-    send_ix(svm, wallet, fund_user_ix(user, wallet.pubkey(), lamports))
 }
 
 #[test]
@@ -155,61 +134,5 @@ fn init_user_cannot_reinitialize() {
             || logs.contains("AlreadyInUse")
             || logs.contains("custom program error: 0x0"),
         "unexpected reinit error: {logs}"
-    );
-}
-
-#[test]
-fn fund_user_increases_user_lamports() {
-    let (mut svm, wallet) = setup();
-    let (user, _) = user_pda(wallet.pubkey());
-
-    send_init_user(&mut svm, &wallet, INIT_LAMPORTS).expect("init_user");
-    let before = svm.get_account(&user).expect("User PDA exists").lamports;
-
-    svm.expire_blockhash();
-    send_fund_user(&mut svm, &wallet, 500_000).expect("fund_user");
-
-    let after = svm.get_account(&user).expect("User PDA exists").lamports;
-    assert_eq!(after, before + 500_000);
-}
-
-#[test]
-fn fund_user_rejects_zero_amount() {
-    let (mut svm, wallet) = setup();
-
-    send_init_user(&mut svm, &wallet, INIT_LAMPORTS).expect("init_user");
-    svm.expire_blockhash();
-    let logs = send_fund_user(&mut svm, &wallet, 0).expect_err("zero fund_user must fail");
-    assert!(
-        logs.contains("AmountZero")
-            || logs.contains("amount must be greater than zero")
-            || logs.contains("custom program error: 0x1770"),
-        "unexpected zero-amount error: {logs}"
-    );
-}
-
-#[test]
-fn fund_user_rejects_wrong_authority() {
-    let (mut svm, wallet) = setup();
-    let (user, _) = user_pda(wallet.pubkey());
-
-    send_init_user(&mut svm, &wallet, INIT_LAMPORTS).expect("init_user");
-
-    let impostor = Keypair::new();
-    svm.airdrop(&impostor.pubkey(), 10_000_000_000)
-        .expect("airdrop impostor");
-    svm.expire_blockhash();
-
-    let ix = fund_user_ix(user, impostor.pubkey(), 500_000);
-    let logs = send_ix(&mut svm, &impostor, ix).expect_err("wrong authority must fail (SOL-015)");
-    assert!(
-        logs.contains("has_one")
-            || logs.contains("ConstraintHasOne")
-            || logs.contains("ConstraintSeeds")
-            || logs.contains("A has_one constraint was violated")
-            || logs.contains("Unauthorized")
-            || logs.contains("signer is not allowed")
-            || logs.contains("custom program error: 0x1774"),
-        "unexpected wrong-authority error: {logs}"
     );
 }

@@ -17,9 +17,11 @@ use crate::engine::{
 use crate::error::{HyperPayError, Result};
 use crate::policy::Policy;
 use crate::program::{
-    charge_ix, close_session_ix, deposit_ix, eata_pda, fund_user_ix, init_user_ix, open_session_ix,
-    remaining_from_session_data, session_pda, user_mint_pda, user_pda, withdraw_ix,
-    SessionAccounts, WithdrawAccounts,
+    associated_token_address, charge_ix, close_session_ix, delegate_ephemeral_ata_ix,
+    delegate_user_ix, delegation_record_pda, deposit_ix, deposit_spl_ix, eata_pda,
+    ensure_user_mint_ix, init_ephemeral_ata_ix, init_global_vault_ix, init_user_ix,
+    open_session_ix, remaining_from_session_data, session_pda, user_mint_pda, user_pda,
+    withdraw_ix, SessionAccounts, WithdrawAccounts, LOCAL_ER_VALIDATOR, TOKEN_PROGRAM_ID,
 };
 
 #[derive(Debug, Clone)]
@@ -141,18 +143,96 @@ impl HyperPay {
             .await
     }
 
-    /// Tops up the User PDA with lamports. Wallet or a user session token.
-    pub async fn fund_user(&self, lamports: u64, session_token: Option<&str>) -> Result<Payment> {
+    /// Delegates the User PDA to the ephemeral rollup (MagicBlock CPI on base).
+    pub async fn delegate_user(&self, validator: Option<&str>) -> Result<Payment> {
+        let authority = self.signer()?.pubkey();
+        let (user, _) = user_pda(&authority);
+        let validator = match validator {
+            Some(s) => Some(parse_pubkey(s)?),
+            None => Some(LOCAL_ER_VALIDATOR),
+        };
+        let ix = delegate_user_ix(user, authority, validator);
+        self.submit_base(ix, user.to_string(), 0, "delegate").await
+    }
+
+    /// Deposits tokens from the signer's Tokenkeg ATA into the User eATA (base),
+    /// then creates the ephemeral UserMint if it is missing. `reserved` stays 0
+    /// until `open_session` / `deposit`. Requires `init_user` + `delegate_user`.
+    pub async fn top_up(
+        &self,
+        amount: &str,
+        token: Option<&str>,
+        session_token: Option<&str>,
+    ) -> Result<Payment> {
+        let (token, units) = self.resolve_amount(amount, token)?;
         let signer = self.signer()?.pubkey();
+        self.policy.check(&signer.to_string(), &token, units)?;
+        let mint = parse_pubkey(&token.mint)?;
         let (user, _) = user_pda(&signer);
-        let ix = fund_user_ix(
+        let (user_mint, _) = user_mint_pda(&user, &mint);
+        let (eata, _) = eata_pda(&user, &mint);
+        let inits = [
+            init_global_vault_ix(signer, mint),
+            init_ephemeral_ata_ix(signer, user, mint),
+        ];
+        self.submit(
+            &inits,
+            &self.rpc_url,
+            "base",
+            Receipt {
+                to: signer.to_string(),
+                units: 0,
+                token: token.clone(),
+                amount: format_amount(0, &token),
+            },
+            true,
+        )
+        .await?;
+        let amount_label = format_amount(units, &token);
+        let deposit = deposit_spl_ix(signer, user, mint, units);
+        let payment = self
+            .submit(
+                std::slice::from_ref(&deposit),
+                &self.rpc_url,
+                "base",
+                Receipt {
+                    to: signer.to_string(),
+                    units,
+                    token: token.clone(),
+                    amount: amount_label,
+                },
+                true,
+            )
+            .await?;
+        if get_account_data(&self.http, &self.rpc_url, &delegation_record_pda(&eata))
+            .await?
+            .is_none()
+        {
+            let delegate = delegate_ephemeral_ata_ix(signer, user, mint, None);
+            self.submit(
+                std::slice::from_ref(&delegate),
+                &self.rpc_url,
+                "base",
+                Receipt {
+                    to: signer.to_string(),
+                    units: 0,
+                    token: token.clone(),
+                    amount: format_amount(0, &token),
+                },
+                true,
+            )
+            .await?;
+        }
+        let ensure = ensure_user_mint_ix(
             user,
             signer,
-            lamports,
+            user_mint,
+            mint,
             parse_optional_pubkey(session_token)?,
         );
-        self.submit_base(ix, signer.to_string(), lamports, "lamports")
-            .await
+        self.submit_ephemeral(ensure, signer.to_string(), 0, token)
+            .await?;
+        Ok(payment)
     }
 
     /// Opens a session with `merchant` and optionally deposits `amount`.
@@ -201,7 +281,7 @@ impl HyperPay {
         self.policy.check(&merchant.to_string(), &token, units)?;
         let user_wallet = parse_pubkey(user)?;
         let accounts = self.session_accounts(user_wallet, merchant, &token)?;
-        let (merchant_eata, _) = eata_pda(&merchant, &accounts.mint);
+        let merchant_eata = associated_token_address(&merchant, &accounts.mint, &TOKEN_PROGRAM_ID);
         let ix = charge_ix(&accounts, merchant_eata, units, None);
         self.submit_ephemeral(ix, merchant.to_string(), units, token)
             .await
@@ -240,8 +320,8 @@ impl HyperPay {
         let mint = parse_pubkey(&token.mint)?;
         let (user, _) = user_pda(&signer);
         let (user_mint, _) = user_mint_pda(&user, &mint);
-        let (user_eata, _) = eata_pda(&user, &mint);
-        let (dest_eata, _) = eata_pda(&dest_owner, &mint);
+        let user_eata = associated_token_address(&user, &mint, &TOKEN_PROGRAM_ID);
+        let dest_eata = associated_token_address(&dest_owner, &mint, &TOKEN_PROGRAM_ID);
         let ix = withdraw_ix(
             &WithdrawAccounts {
                 user,
@@ -331,7 +411,7 @@ impl HyperPay {
         let (user, _) = user_pda(&wallet);
         let (user_mint, _) = user_mint_pda(&user, &mint);
         let (session, _) = session_pda(&user, &merchant, &mint);
-        let (user_eata, _) = eata_pda(&user, &mint);
+        let user_eata = associated_token_address(&user, &mint, &TOKEN_PROGRAM_ID);
         Ok(SessionAccounts {
             signer: self.signer()?.pubkey(),
             user,
@@ -351,7 +431,7 @@ impl HyperPay {
         amount_label: &str,
     ) -> Result<Payment> {
         self.submit(
-            ix,
+            std::slice::from_ref(&ix),
             &self.rpc_url,
             "base",
             Receipt {
@@ -360,6 +440,7 @@ impl HyperPay {
                 token: TokenInfo::new("SOL", "So11111111111111111111111111111111111111112", 9),
                 amount: amount_label.to_string(),
             },
+            false,
         )
         .await
     }
@@ -373,7 +454,7 @@ impl HyperPay {
     ) -> Result<Payment> {
         let amount = format_amount(units, &token);
         self.submit(
-            ix,
+            std::slice::from_ref(&ix),
             &self.ephemeral_rpc,
             "ephemeral",
             Receipt {
@@ -382,22 +463,25 @@ impl HyperPay {
                 token,
                 amount,
             },
+            true,
         )
         .await
     }
 
     async fn submit(
         &self,
-        ix: Instruction,
+        ixs: &[Instruction],
         rpc_url: &str,
         settled_on: &str,
         receipt: Receipt,
+        skip_preflight: bool,
     ) -> Result<Payment> {
         let payer = self.signer()?.pubkey();
         let blockhash = get_latest_blockhash(&self.http, rpc_url).await?;
-        let message = Message::new_with_blockhash(&[ix], Some(&payer), &blockhash);
+        let message = Message::new_with_blockhash(ixs, Some(&payer), &blockhash);
         let tx = VersionedTransaction::from(Transaction::new_unsigned(message));
-        let result = sign_and_submit(tx, self.signer()?, rpc_url, settled_on).await?;
+        let result =
+            sign_and_submit(tx, self.signer()?, rpc_url, settled_on, skip_preflight).await?;
         Ok(Payment {
             explorer_url: (result.settled_on == "base")
                 .then(|| self.explorer_url(&result.signature)),
@@ -491,6 +575,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn top_up_is_blocked_by_policy_before_sign() {
+        let keypair = Keypair::new();
+        let addr = keypair.pubkey().to_string();
+        let policy = Policy::new().deny(&[&addr]);
+        let hp = HyperPay::new(keypair, "devnet").with_policy(policy);
+
+        let err = hp.top_up("1 USDC", None, None).await.unwrap_err();
+        match err {
+            HyperPayError::Policy(_) => {}
+            other => panic!("unexpected error: {other}"),
+        }
+    }
+
+    #[tokio::test]
     async fn charge_is_blocked_by_policy_before_sign() {
         let keypair = Keypair::new();
         let user = Keypair::new().pubkey();
@@ -517,8 +615,8 @@ mod tests {
         let (user, _) = user_pda(&user_wallet);
         let (user_mint, _) = user_mint_pda(&user, &mint);
         let (session, _) = session_pda(&user, &merchant, &mint);
-        let (user_eata, _) = eata_pda(&user, &mint);
-        let (merchant_eata, _) = eata_pda(&merchant, &mint);
+        let (user_eata, _) = (Pubkey::new_unique(), 0u8);
+        let (merchant_eata, _) = (Pubkey::new_unique(), 0u8);
         let ix = charge_ix(
             &SessionAccounts {
                 user,
