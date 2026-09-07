@@ -1,6 +1,8 @@
 #![allow(unexpected_cfgs)]
 
 use anchor_lang::prelude::*;
+use anchor_spl::token::TokenAccount;
+use ephemeral_rollups_sdk::anchor::ephemeral_accounts;
 
 pub mod accounting;
 pub mod errors;
@@ -10,6 +12,36 @@ use errors::*;
 use state::*;
 
 declare_id!("Adyo1eYuP8deoLxwgkvaomUYvAUKUGryh4RGpdTR9YhU");
+
+pub(crate) fn apply_deposit(
+    user_mint: &mut UserMint,
+    session: &mut Session,
+    eata_balance: u64,
+    amount: u64,
+) -> Result<()> {
+    user_mint.reserved = crate::accounting::reserve(eata_balance, user_mint.reserved, amount)
+        .map_err(HyperpayError::from)?;
+    session.remaining = session
+        .remaining
+        .checked_add(amount)
+        .ok_or(HyperpayError::Overflow)?;
+    Ok(())
+}
+
+fn store_program_account<T: AccountSerialize>(info: &AccountInfo, value: &T) -> Result<()> {
+    let mut data = info.try_borrow_mut_data()?;
+    value.try_serialize(&mut &mut data[..])
+}
+
+fn load_program_account<T: AccountDeserialize>(info: &AccountInfo) -> Result<T> {
+    let data = info.try_borrow_data()?;
+    T::try_deserialize(&mut &data[..])
+}
+
+fn is_uninitialized(info: &AccountInfo) -> Result<bool> {
+    let data = info.try_borrow_data()?;
+    Ok(data.iter().take(8).all(|byte| *byte == 0))
+}
 
 #[program]
 pub mod hyperpay {
@@ -57,6 +89,63 @@ pub mod hyperpay {
         )?;
         Ok(())
     }
+
+    pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
+        apply_deposit(
+            &mut ctx.accounts.user_mint,
+            &mut ctx.accounts.session,
+            ctx.accounts.user_eata.amount,
+            amount,
+        )
+    }
+
+    pub fn open_session(ctx: Context<OpenSession>, amount: u64) -> Result<()> {
+        require!(
+            ctx.accounts.session.data_len() == 0,
+            HyperpayError::SessionAlreadyOpen
+        );
+        ctx.accounts
+            .create_ephemeral_session((8 + Session::INIT_SPACE) as u32)?;
+        store_program_account(
+            &ctx.accounts.session.to_account_info(),
+            &Session {
+                user: ctx.accounts.user.key(),
+                merchant: ctx.accounts.merchant.key(),
+                mint: ctx.accounts.mint.key(),
+                remaining: 0,
+                bump: ctx.bumps.session,
+            },
+        )?;
+
+        if amount > 0 {
+            ctx.accounts
+                .init_if_needed_ephemeral_user_mint((8 + UserMint::INIT_SPACE) as u32)?;
+            if is_uninitialized(&ctx.accounts.user_mint.to_account_info())? {
+                store_program_account(
+                    &ctx.accounts.user_mint.to_account_info(),
+                    &UserMint {
+                        user: ctx.accounts.user.key(),
+                        mint: ctx.accounts.mint.key(),
+                        reserved: 0,
+                        bump: ctx.bumps.user_mint,
+                    },
+                )?;
+            }
+            let mut user_mint =
+                load_program_account::<UserMint>(&ctx.accounts.user_mint.to_account_info())?;
+            let mut session =
+                load_program_account::<Session>(&ctx.accounts.session.to_account_info())?;
+            apply_deposit(
+                &mut user_mint,
+                &mut session,
+                ctx.accounts.user_eata.amount,
+                amount,
+            )?;
+            store_program_account(&ctx.accounts.user_mint.to_account_info(), &user_mint)?;
+            store_program_account(&ctx.accounts.session.to_account_info(), &session)?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Accounts)]
@@ -89,4 +178,126 @@ pub struct FundUser<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
     pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct Deposit<'info> {
+    #[account(
+        seeds = [USER_SEED, user.authority.as_ref()],
+        bump = user.bump
+    )]
+    pub user: Account<'info, User>,
+    #[account(constraint = signer.key() == user.authority @ HyperpayError::Unauthorized)]
+    pub signer: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [USER_MINT_SEED, user.key().as_ref(), mint.key().as_ref()],
+        bump = user_mint.bump,
+        constraint = user_mint.user == user.key(),
+        constraint = user_mint.mint == mint.key()
+    )]
+    pub user_mint: Account<'info, UserMint>,
+    #[account(
+        mut,
+        seeds = [SESSION_SEED, user.key().as_ref(), merchant.key().as_ref(), mint.key().as_ref()],
+        bump = session.bump,
+        constraint = session.user == user.key(),
+        constraint = session.mint == mint.key()
+    )]
+    pub session: Account<'info, Session>,
+    /// CHECK: merchant is a session seed only; deposit is authorized by the user.
+    pub merchant: UncheckedAccount<'info>,
+    /// CHECK: mint is pinned by PDA seeds and the eATA token::mint constraint.
+    pub mint: UncheckedAccount<'info>,
+    #[account(
+        token::authority = user,
+        token::mint = mint
+    )]
+    pub user_eata: Account<'info, TokenAccount>,
+}
+
+#[ephemeral_accounts]
+#[derive(Accounts)]
+pub struct OpenSession<'info> {
+    #[account(
+        mut,
+        sponsor,
+        seeds = [USER_SEED, user.authority.as_ref()],
+        bump = user.bump
+    )]
+    pub user: Account<'info, User>,
+    #[account(constraint = signer.key() == user.authority @ HyperpayError::Unauthorized)]
+    pub signer: Signer<'info>,
+    /// CHECK: ephemeral session PDA created via create_ephemeral_session.
+    #[account(
+        mut,
+        eph,
+        seeds = [SESSION_SEED, user.key().as_ref(), merchant.key().as_ref(), mint.key().as_ref()],
+        bump
+    )]
+    pub session: UncheckedAccount<'info>,
+    /// CHECK: ephemeral UserMint PDA; created on first deposit for this mint.
+    #[account(
+        mut,
+        eph,
+        seeds = [USER_MINT_SEED, user.key().as_ref(), mint.key().as_ref()],
+        bump
+    )]
+    pub user_mint: UncheckedAccount<'info>,
+    /// CHECK: merchant is a session seed only; the user is the signer.
+    pub merchant: UncheckedAccount<'info>,
+    /// CHECK: mint is pinned by PDA seeds and the eATA token::mint constraint.
+    pub mint: UncheckedAccount<'info>,
+    #[account(
+        token::authority = user,
+        token::mint = mint
+    )]
+    pub user_eata: Account<'info, TokenAccount>,
+}
+
+#[cfg(test)]
+mod apply_deposit_tests {
+    use super::*;
+
+    fn user_mint(reserved: u64) -> UserMint {
+        UserMint {
+            user: Pubkey::default(),
+            mint: Pubkey::default(),
+            reserved,
+            bump: 255,
+        }
+    }
+
+    fn session(remaining: u64) -> Session {
+        Session {
+            user: Pubkey::default(),
+            merchant: Pubkey::default(),
+            mint: Pubkey::default(),
+            remaining,
+            bump: 255,
+        }
+    }
+
+    #[test]
+    fn apply_deposit_sets_reserved_and_remaining() {
+        let mut user_mint = user_mint(0);
+        let mut session = session(0);
+        apply_deposit(&mut user_mint, &mut session, 100, 60).unwrap();
+        assert_eq!(user_mint.reserved, 60);
+        assert_eq!(session.remaining, 60);
+    }
+
+    #[test]
+    fn apply_deposit_rejects_zero() {
+        let mut user_mint = user_mint(0);
+        let mut session = session(0);
+        assert!(apply_deposit(&mut user_mint, &mut session, 100, 0).is_err());
+    }
+
+    #[test]
+    fn apply_deposit_rejects_above_available() {
+        let mut user_mint = user_mint(0);
+        let mut session = session(0);
+        assert!(apply_deposit(&mut user_mint, &mut session, 100, 101).is_err());
+    }
 }

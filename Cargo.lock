@@ -2155,6 +2155,7 @@ dependencies = [
  "litesvm",
  "session-keys",
  "sha2 0.10.9",
+ "solana-account 3.4.0",
  "solana-instruction 3.5.0",
  "solana-keypair 3.1.2",
  "solana-message 3.1.0",
