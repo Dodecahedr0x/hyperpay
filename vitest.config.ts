@@ -57,6 +57,6 @@ export default defineConfig({
     environmentMatchGlobs: [['packages/react/**', 'jsdom']],
     // Dist/exports smoke lives in test/exports and uses vitest.dist.config.ts
     // so a bare `vitest run` cannot pass via these source aliases.
-    exclude: ['**/node_modules/**', '**/dist/**', 'test/exports/**'],
+    exclude: ['**/node_modules/**', '**/dist/**', 'test/exports/**', '**/.worktrees/**'],
   },
 })
