@@ -246,6 +246,7 @@ fn charge_ix(fx: &ChargeFixture, signer: Address, amount: u64) -> Instruction {
             AccountMeta::new(fx.user_eata, false),
             AccountMeta::new(fx.merchant_eata, false),
             AccountMeta::new_readonly(token_program_id(), false),
+            AccountMeta::new_readonly(program_id(), false),
         ],
         data,
     }

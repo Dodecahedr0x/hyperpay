@@ -3,6 +3,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Transfer};
 use ephemeral_rollups_sdk::anchor::ephemeral_accounts;
+use session_keys::{session_auth_or, SessionError, SessionTokenV2};
 
 pub mod accounting;
 pub mod errors;
@@ -86,17 +87,21 @@ pub mod hyperpay {
         Ok(())
     }
 
+    #[session_auth_or(
+        ctx.accounts.signer.key() == ctx.accounts.user.authority,
+        HyperpayError::Unauthorized
+    )]
     pub fn fund_user(ctx: Context<FundUser>, lamports: u64) -> Result<()> {
         require!(lamports > 0, HyperpayError::AmountZero);
         let ix = anchor_lang::solana_program::system_instruction::transfer(
-            &ctx.accounts.authority.key(),
+            &ctx.accounts.signer.key(),
             &ctx.accounts.user.key(),
             lamports,
         );
         anchor_lang::solana_program::program::invoke(
             &ix,
             &[
-                ctx.accounts.authority.to_account_info(),
+                ctx.accounts.signer.to_account_info(),
                 ctx.accounts.user.to_account_info(),
                 ctx.accounts.system_program.to_account_info(),
             ],
@@ -104,6 +109,10 @@ pub mod hyperpay {
         Ok(())
     }
 
+    #[session_auth_or(
+        ctx.accounts.signer.key() == ctx.accounts.user.authority,
+        HyperpayError::Unauthorized
+    )]
     pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
         apply_deposit(
             &mut ctx.accounts.user_mint,
@@ -113,6 +122,10 @@ pub mod hyperpay {
         )
     }
 
+    #[session_auth_or(
+        ctx.accounts.signer.key() == ctx.accounts.user.authority,
+        HyperpayError::Unauthorized
+    )]
     pub fn open_session(ctx: Context<OpenSession>, amount: u64) -> Result<()> {
         require!(
             ctx.accounts.session.data_len() == 0,
@@ -161,13 +174,12 @@ pub mod hyperpay {
         Ok(())
     }
 
+    #[session_auth_or(
+        ctx.accounts.signer.key() == ctx.accounts.user.authority
+            || ctx.accounts.signer.key() == ctx.accounts.session.merchant,
+        HyperpayError::Unauthorized
+    )]
     pub fn charge(ctx: Context<Charge>, amount: u64) -> Result<()> {
-        require!(
-            ctx.accounts.signer.key() == ctx.accounts.session.merchant
-                || ctx.accounts.signer.key() == ctx.accounts.user.authority,
-            HyperpayError::Unauthorized
-        );
-
         let new_remaining =
             crate::accounting::debit_remaining(ctx.accounts.session.remaining, amount)
                 .map_err(HyperpayError::from)?;
@@ -202,6 +214,10 @@ pub mod hyperpay {
         Ok(())
     }
 
+    #[session_auth_or(
+        ctx.accounts.signer.key() == ctx.accounts.user.authority,
+        HyperpayError::Unauthorized
+    )]
     pub fn close_session(ctx: Context<CloseSession>) -> Result<()> {
         let mut session = load_program_account::<Session>(&ctx.accounts.session.to_account_info())?;
         require_keys_eq!(session.user, ctx.accounts.user.key());
@@ -229,6 +245,10 @@ pub mod hyperpay {
         Ok(())
     }
 
+    #[session_auth_or(
+        ctx.accounts.signer.key() == ctx.accounts.user.authority,
+        HyperpayError::Unauthorized
+    )]
     pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
         require!(amount > 0, HyperpayError::AmountZero);
         let reserved = if is_uninitialized(&ctx.accounts.user_mint.to_account_info())? {
@@ -283,28 +303,28 @@ pub struct InitUser<'info> {
     pub system_program: Program<'info, System>,
 }
 
-#[derive(Accounts)]
+#[derive(Accounts, session_keys::Session)]
 pub struct FundUser<'info> {
     #[account(
         mut,
-        seeds = [USER_SEED, authority.key().as_ref()],
-        bump = user.bump,
-        has_one = authority
+        seeds = [USER_SEED, user.authority.as_ref()],
+        bump = user.bump
     )]
     pub user: Account<'info, User>,
     #[account(mut)]
-    pub authority: Signer<'info>,
+    pub signer: Signer<'info>,
     pub system_program: Program<'info, System>,
+    #[session(signer = signer, authority = user.authority.key())]
+    pub session_token: Option<Account<'info, SessionTokenV2>>,
 }
 
-#[derive(Accounts)]
+#[derive(Accounts, session_keys::Session)]
 pub struct Deposit<'info> {
     #[account(
         seeds = [USER_SEED, user.authority.as_ref()],
         bump = user.bump
     )]
     pub user: Account<'info, User>,
-    #[account(constraint = signer.key() == user.authority @ HyperpayError::Unauthorized)]
     pub signer: Signer<'info>,
     #[account(
         mut,
@@ -331,10 +351,12 @@ pub struct Deposit<'info> {
         token::mint = mint
     )]
     pub user_eata: Account<'info, TokenAccount>,
+    #[session(signer = signer, authority = user.authority.key())]
+    pub session_token: Option<Account<'info, SessionTokenV2>>,
 }
 
 #[ephemeral_accounts]
-#[derive(Accounts)]
+#[derive(Accounts, session_keys::Session)]
 pub struct OpenSession<'info> {
     #[account(
         mut,
@@ -343,7 +365,6 @@ pub struct OpenSession<'info> {
         bump = user.bump
     )]
     pub user: Account<'info, User>,
-    #[account(constraint = signer.key() == user.authority @ HyperpayError::Unauthorized)]
     pub signer: Signer<'info>,
     /// CHECK: ephemeral session PDA created via create_ephemeral_session.
     #[account(
@@ -370,9 +391,11 @@ pub struct OpenSession<'info> {
         token::mint = mint
     )]
     pub user_eata: Account<'info, TokenAccount>,
+    #[session(signer = signer, authority = user.authority.key())]
+    pub session_token: Option<Account<'info, SessionTokenV2>>,
 }
 
-#[derive(Accounts)]
+#[derive(Accounts, session_keys::Session)]
 pub struct Charge<'info> {
     #[account(
         seeds = [USER_SEED, user.authority.as_ref()],
@@ -414,10 +437,12 @@ pub struct Charge<'info> {
     )]
     pub merchant_eata: Account<'info, TokenAccount>,
     pub token_program: Program<'info, Token>,
+    #[session(signer = signer, authority = user.authority.key())]
+    pub session_token: Option<Account<'info, SessionTokenV2>>,
 }
 
 #[ephemeral_accounts]
-#[derive(Accounts)]
+#[derive(Accounts, session_keys::Session)]
 pub struct CloseSession<'info> {
     #[account(
         mut,
@@ -426,7 +451,6 @@ pub struct CloseSession<'info> {
         bump = user.bump
     )]
     pub user: Account<'info, User>,
-    #[account(constraint = signer.key() == user.authority @ HyperpayError::Unauthorized)]
     pub signer: Signer<'info>,
     /// CHECK: ephemeral session PDA closed via close_ephemeral_session.
     #[account(
@@ -448,16 +472,17 @@ pub struct CloseSession<'info> {
     pub merchant: UncheckedAccount<'info>,
     /// CHECK: mint is pinned by PDA seeds.
     pub mint: UncheckedAccount<'info>,
+    #[session(signer = signer, authority = user.authority.key())]
+    pub session_token: Option<Account<'info, SessionTokenV2>>,
 }
 
-#[derive(Accounts)]
+#[derive(Accounts, session_keys::Session)]
 pub struct Withdraw<'info> {
     #[account(
         seeds = [USER_SEED, user.authority.as_ref()],
         bump = user.bump
     )]
     pub user: Account<'info, User>,
-    #[account(constraint = signer.key() == user.authority @ HyperpayError::Unauthorized)]
     pub signer: Signer<'info>,
     /// CHECK: optional; missing or uninitialized UserMint means reserved = 0.
     #[account(
@@ -479,6 +504,8 @@ pub struct Withdraw<'info> {
     )]
     pub destination: Account<'info, TokenAccount>,
     pub token_program: Program<'info, Token>,
+    #[session(signer = signer, authority = user.authority.key())]
+    pub session_token: Option<Account<'info, SessionTokenV2>>,
 }
 
 #[cfg(test)]

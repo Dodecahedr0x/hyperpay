@@ -231,6 +231,7 @@ fn deposit_ix(fx: &DepositFixture, amount: u64) -> Instruction {
             AccountMeta::new_readonly(fx.merchant, false),
             AccountMeta::new_readonly(fx.mint, false),
             AccountMeta::new_readonly(fx.user_eata, false),
+            AccountMeta::new_readonly(program_id(), false),
         ],
         data,
     }

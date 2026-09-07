@@ -88,6 +88,7 @@ fn fund_user_ix(user: Address, authority: Address, lamports: u64) -> Instruction
             AccountMeta::new(user, false),
             AccountMeta::new(authority, true),
             AccountMeta::new_readonly(Address::default(), false),
+            AccountMeta::new_readonly(program_id(), false),
         ],
         data,
     }
@@ -205,7 +206,10 @@ fn fund_user_rejects_wrong_authority() {
         logs.contains("has_one")
             || logs.contains("ConstraintHasOne")
             || logs.contains("ConstraintSeeds")
-            || logs.contains("A has_one constraint was violated"),
+            || logs.contains("A has_one constraint was violated")
+            || logs.contains("Unauthorized")
+            || logs.contains("signer is not allowed")
+            || logs.contains("custom program error: 0x1774"),
         "unexpected wrong-authority error: {logs}"
     );
 }
