@@ -1,6 +1,6 @@
 {
   "name": "@magicblock-labs/hyperpay-core",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "HyperPay client: openSession, charge, deposit, withdraw, and spend policy.",
   "license": "MIT",
   "type": "module",
