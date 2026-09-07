@@ -28,6 +28,15 @@ pub(crate) fn apply_deposit(
     Ok(())
 }
 
+pub(crate) fn apply_close_session(user_mint: &mut UserMint, session: &mut Session) -> Result<()> {
+    user_mint.reserved = user_mint
+        .reserved
+        .checked_sub(session.remaining)
+        .ok_or(HyperpayError::Overflow)?;
+    session.remaining = 0;
+    Ok(())
+}
+
 fn store_program_account<T: AccountSerialize>(info: &AccountInfo, value: &T) -> Result<()> {
     let mut data = info.try_borrow_mut_data()?;
     value.try_serialize(&mut &mut data[..])
@@ -187,6 +196,55 @@ pub mod hyperpay {
         ctx.accounts.user_mint.reserved = new_reserved;
         Ok(())
     }
+
+    pub fn close_session(ctx: Context<CloseSession>) -> Result<()> {
+        let mut user_mint =
+            load_program_account::<UserMint>(&ctx.accounts.user_mint.to_account_info())?;
+        let mut session = load_program_account::<Session>(&ctx.accounts.session.to_account_info())?;
+        require_keys_eq!(user_mint.user, ctx.accounts.user.key());
+        require_keys_eq!(user_mint.mint, ctx.accounts.mint.key());
+        require_keys_eq!(session.user, ctx.accounts.user.key());
+        require_keys_eq!(session.merchant, ctx.accounts.merchant.key());
+        require_keys_eq!(session.mint, ctx.accounts.mint.key());
+
+        apply_close_session(&mut user_mint, &mut session)?;
+        store_program_account(&ctx.accounts.user_mint.to_account_info(), &user_mint)?;
+
+        ctx.accounts.close_ephemeral_session()?;
+        if user_mint.reserved == 0 {
+            ctx.accounts.close_ephemeral_user_mint()?;
+        }
+        Ok(())
+    }
+
+    pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
+        require!(amount > 0, HyperpayError::AmountZero);
+        let available = crate::accounting::available(
+            ctx.accounts.user_eata.amount,
+            ctx.accounts.user_mint.reserved,
+        );
+        require!(amount <= available, HyperpayError::InsufficientAvailable);
+
+        let bump = [ctx.accounts.user.bump];
+        let signer_seeds = [
+            USER_SEED,
+            ctx.accounts.user.authority.as_ref(),
+            bump.as_ref(),
+        ];
+        token::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.key(),
+                Transfer {
+                    from: ctx.accounts.user_eata.to_account_info(),
+                    to: ctx.accounts.destination.to_account_info(),
+                    authority: ctx.accounts.user.to_account_info(),
+                },
+                &[&signer_seeds],
+            ),
+            amount,
+        )?;
+        Ok(())
+    }
 }
 
 #[derive(Accounts)]
@@ -340,6 +398,72 @@ pub struct Charge<'info> {
     pub token_program: Program<'info, Token>,
 }
 
+#[ephemeral_accounts]
+#[derive(Accounts)]
+pub struct CloseSession<'info> {
+    #[account(
+        mut,
+        sponsor,
+        seeds = [USER_SEED, user.authority.as_ref()],
+        bump = user.bump
+    )]
+    pub user: Account<'info, User>,
+    #[account(constraint = signer.key() == user.authority @ HyperpayError::Unauthorized)]
+    pub signer: Signer<'info>,
+    /// CHECK: ephemeral session PDA closed via close_ephemeral_session.
+    #[account(
+        mut,
+        eph,
+        seeds = [SESSION_SEED, user.key().as_ref(), merchant.key().as_ref(), mint.key().as_ref()],
+        bump
+    )]
+    pub session: UncheckedAccount<'info>,
+    /// CHECK: ephemeral UserMint PDA; closed when reserved hits zero.
+    #[account(
+        mut,
+        eph,
+        seeds = [USER_MINT_SEED, user.key().as_ref(), mint.key().as_ref()],
+        bump
+    )]
+    pub user_mint: UncheckedAccount<'info>,
+    /// CHECK: merchant is a session seed only; close is authorized by the user.
+    pub merchant: UncheckedAccount<'info>,
+    /// CHECK: mint is pinned by PDA seeds.
+    pub mint: UncheckedAccount<'info>,
+}
+
+#[derive(Accounts)]
+pub struct Withdraw<'info> {
+    #[account(
+        seeds = [USER_SEED, user.authority.as_ref()],
+        bump = user.bump
+    )]
+    pub user: Account<'info, User>,
+    #[account(constraint = signer.key() == user.authority @ HyperpayError::Unauthorized)]
+    pub signer: Signer<'info>,
+    #[account(
+        seeds = [USER_MINT_SEED, user.key().as_ref(), mint.key().as_ref()],
+        bump = user_mint.bump,
+        constraint = user_mint.user == user.key(),
+        constraint = user_mint.mint == mint.key()
+    )]
+    pub user_mint: Account<'info, UserMint>,
+    /// CHECK: mint is pinned by PDA seeds and the eATA token::mint constraints.
+    pub mint: UncheckedAccount<'info>,
+    #[account(
+        mut,
+        token::authority = user,
+        token::mint = mint
+    )]
+    pub user_eata: Account<'info, TokenAccount>,
+    #[account(
+        mut,
+        token::mint = mint
+    )]
+    pub destination: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+}
+
 #[cfg(test)]
 mod apply_deposit_tests {
     use super::*;
@@ -384,5 +508,30 @@ mod apply_deposit_tests {
         let mut user_mint = user_mint(0);
         let mut session = session(0);
         assert!(apply_deposit(&mut user_mint, &mut session, 100, 101).is_err());
+    }
+
+    #[test]
+    fn apply_close_session_unreserves_remaining() {
+        let mut user_mint = user_mint(30);
+        let mut session = session(30);
+        apply_close_session(&mut user_mint, &mut session).unwrap();
+        assert_eq!(user_mint.reserved, 0);
+        assert_eq!(session.remaining, 0);
+    }
+
+    #[test]
+    fn apply_close_session_leaves_other_reservations() {
+        let mut user_mint = user_mint(50);
+        let mut session = session(30);
+        apply_close_session(&mut user_mint, &mut session).unwrap();
+        assert_eq!(user_mint.reserved, 20);
+        assert_eq!(session.remaining, 0);
+    }
+
+    #[test]
+    fn apply_close_session_rejects_remaining_above_reserved() {
+        let mut user_mint = user_mint(20);
+        let mut session = session(30);
+        assert!(apply_close_session(&mut user_mint, &mut session).is_err());
     }
 }
