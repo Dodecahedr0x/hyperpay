@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = ["crates/hyperpay", "programs/hyperpay"]
+
+[workspace.dependencies]
+anchor-lang = "0.31.1"
+anchor-spl = "0.31.1"

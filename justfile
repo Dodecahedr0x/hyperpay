@@ -15,6 +15,14 @@ test:
 test-rs:
     cargo test --manifest-path {{crate}}/Cargo.toml
 
+# Anchor program unit tests (reservation math)
+test-program:
+    cargo test -p hyperpay-program
+
+# Build the Anchor program
+build-program:
+    cargo build -p hyperpay-program
+
 # JS + Rust unit tests
 test-all: test test-rs
 
