@@ -1,7 +1,7 @@
 #![allow(unexpected_cfgs)]
 
 use anchor_lang::prelude::*;
-use anchor_spl::token::TokenAccount;
+use anchor_spl::token::{self, Token, TokenAccount, Transfer};
 use ephemeral_rollups_sdk::anchor::ephemeral_accounts;
 
 pub mod accounting;
@@ -146,6 +146,47 @@ pub mod hyperpay {
         }
         Ok(())
     }
+
+    pub fn charge(ctx: Context<Charge>, amount: u64) -> Result<()> {
+        require!(
+            ctx.accounts.signer.key() == ctx.accounts.session.merchant
+                || ctx.accounts.signer.key() == ctx.accounts.user.authority,
+            HyperpayError::Unauthorized
+        );
+
+        let new_remaining =
+            crate::accounting::debit_remaining(ctx.accounts.session.remaining, amount)
+                .map_err(HyperpayError::from)?;
+        let new_reserved = ctx
+            .accounts
+            .user_mint
+            .reserved
+            .checked_sub(amount)
+            .ok_or(HyperpayError::Overflow)?;
+
+        let bump = [ctx.accounts.user.bump];
+        let signer_seeds = [
+            USER_SEED,
+            ctx.accounts.user.authority.as_ref(),
+            bump.as_ref(),
+        ];
+        token::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.key(),
+                Transfer {
+                    from: ctx.accounts.user_eata.to_account_info(),
+                    to: ctx.accounts.merchant_eata.to_account_info(),
+                    authority: ctx.accounts.user.to_account_info(),
+                },
+                &[&signer_seeds],
+            ),
+            amount,
+        )?;
+
+        ctx.accounts.session.remaining = new_remaining;
+        ctx.accounts.user_mint.reserved = new_reserved;
+        Ok(())
+    }
 }
 
 #[derive(Accounts)]
@@ -253,6 +294,50 @@ pub struct OpenSession<'info> {
         token::mint = mint
     )]
     pub user_eata: Account<'info, TokenAccount>,
+}
+
+#[derive(Accounts)]
+pub struct Charge<'info> {
+    #[account(
+        seeds = [USER_SEED, user.authority.as_ref()],
+        bump = user.bump
+    )]
+    pub user: Account<'info, User>,
+    pub signer: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [USER_MINT_SEED, user.key().as_ref(), mint.key().as_ref()],
+        bump = user_mint.bump,
+        constraint = user_mint.user == user.key(),
+        constraint = user_mint.mint == mint.key()
+    )]
+    pub user_mint: Account<'info, UserMint>,
+    #[account(
+        mut,
+        seeds = [SESSION_SEED, user.key().as_ref(), merchant.key().as_ref(), mint.key().as_ref()],
+        bump = session.bump,
+        constraint = session.user == user.key(),
+        constraint = session.merchant == merchant.key(),
+        constraint = session.mint == mint.key()
+    )]
+    pub session: Account<'info, Session>,
+    /// CHECK: merchant is pinned by session seeds and merchant_eata token::authority.
+    pub merchant: UncheckedAccount<'info>,
+    /// CHECK: mint is pinned by PDA seeds and the eATA token::mint constraints.
+    pub mint: UncheckedAccount<'info>,
+    #[account(
+        mut,
+        token::authority = user,
+        token::mint = mint
+    )]
+    pub user_eata: Account<'info, TokenAccount>,
+    #[account(
+        mut,
+        token::authority = session.merchant,
+        token::mint = session.mint
+    )]
+    pub merchant_eata: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
 }
 
 #[cfg(test)]
