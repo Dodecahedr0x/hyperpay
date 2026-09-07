@@ -12,7 +12,7 @@ export class HyperPayError extends Error {
  */
 export class PolicyError extends HyperPayError {}
 
-/** The payments API returned a non-2xx response or an `{ error: ... }` body. */
+/** A JSON-RPC call failed (non-2xx or `{ error: ... }` body). */
 export class ApiError extends HyperPayError {
   constructor(
     message: string,

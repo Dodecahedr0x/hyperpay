@@ -69,13 +69,13 @@ describe('Paywall.verify — rejections that never touch the network', () => {
     expect(await paywall().verify('not-base64-json')).toMatchObject({ ok: false, reason: /base64/ })
   })
 
-  it('rejects a proof with no signature', async () => {
-    const header = encode({ refId: '1', signature: '', from: 'x', network: 'devnet' })
-    expect(await paywall().verify(header)).toMatchObject({ ok: false, reason: /refId and signature/ })
+  it('rejects a proof with no user', async () => {
+    const header = encode({ refId: '1', user: '', network: 'devnet' })
+    expect(await paywall().verify(header)).toMatchObject({ ok: false, reason: /refId and user/ })
   })
 
   it('rejects a reference it never issued', async () => {
-    const header = encode({ refId: '999', signature: 'sig', from: 'x', network: 'devnet' })
+    const header = encode({ refId: '999', user: 'User111', network: 'devnet' })
     expect(await paywall().verify(header)).toMatchObject({ ok: false, reason: /Unknown, expired/ })
   })
 })
@@ -137,7 +137,7 @@ describe('payingFetch', () => {
     ).rejects.toThrow(/declined/)
   })
 
-  it('sends the proof in the X-Payment header after paying', async () => {
+  it('sends the user pubkey so the merchant can charge an already-open session', async () => {
     const requirement = await paywall().challenge()
     const calls: RequestInit[] = []
     globalThis.fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
@@ -152,7 +152,6 @@ describe('payingFetch', () => {
       cluster: 'devnet',
       signer: { publicKey: { toBase58: () => 'PAYER' } },
       resolveAmount: hp.resolveAmount.bind(hp),
-      pay: async () => ({ signature: 'SIG123' }),
     } as unknown as HyperPay
 
     const res = await payingFetch({ hp: fakeHp })('https://example.com')
@@ -160,6 +159,6 @@ describe('payingFetch', () => {
 
     const header = new Headers(calls[1]!.headers).get(PAYMENT_HEADER)!
     const proof = JSON.parse(Buffer.from(header, 'base64').toString()) as PaymentProof
-    expect(proof).toMatchObject({ refId: requirement.refId, signature: 'SIG123', from: 'PAYER' })
+    expect(proof).toMatchObject({ refId: requirement.refId, user: 'PAYER' })
   })
 })

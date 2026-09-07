@@ -44,7 +44,15 @@ describe.skipIf(!configured)('MCP server over stdio', () => {
   it('advertises the payment tools an agent needs', async () => {
     const { tools } = await client.listTools()
     const names = tools.map((t) => t.name).sort()
-    expect(names).toEqual(['balance', 'deposit', 'pay', 'policy', 'quote', 'withdraw'])
+    expect(names).toEqual([
+      'balance',
+      'charge',
+      'deposit',
+      'open_session',
+      'policy',
+      'session_balance',
+      'withdraw',
+    ])
   })
 
   it('reports its spending limits so an agent knows its budget', async () => {
@@ -55,24 +63,24 @@ describe.skipIf(!configured)('MCP server over stdio', () => {
     expect(text).toContain('cluster:       devnet')
   })
 
-  it('quotes a payment without sending it', async () => {
+  it('reads a session balance', async () => {
     const res = await client.callTool({
-      name: 'quote',
-      arguments: { to: E2E_PAYEE!, amount: '1 TEST' },
+      name: 'session_balance',
+      arguments: { user: E2E_PAYEE! },
     })
     expect(res.isError).toBeFalsy()
-    expect((res.content as { text: string }[])[0]!.text).toContain('1 TEST')
+    expect((res.content as { text: string }[])[0]!.text).toMatch(/TEST/)
   })
 
   it('reads a live balance', async () => {
     const res = await client.callTool({ name: 'balance', arguments: {} })
-    expect((res.content as { text: string }[])[0]!.text).toMatch(/TEST on base/)
+    expect((res.content as { text: string }[])[0]!.text).toMatch(/TEST/)
   })
 
   it('refuses a payment over the cap and says why, without erroring out', async () => {
     const res = await client.callTool({
-      name: 'pay',
-      arguments: { to: E2E_PAYEE!, amount: '9 TEST' },
+      name: 'open_session',
+      arguments: { merchant: E2E_PAYEE!, amount: '9 TEST' },
     })
     expect(res.isError).toBe(true)
     expect((res.content as { text: string }[])[0]!.text).toMatch(
@@ -82,10 +90,10 @@ describe.skipIf(!configured)('MCP server over stdio', () => {
 
   it('sends a real payment', async () => {
     const res = await client.callTool({
-      name: 'pay',
-      arguments: { to: E2E_PAYEE!, amount: '1 TEST' },
+      name: 'open_session',
+      arguments: { merchant: E2E_PAYEE!, amount: '1 TEST' },
     })
     expect(res.isError).toBeFalsy()
-    expect((res.content as { text: string }[])[0]!.text).toMatch(/Paid 1 TEST .*Signature: [1-9A-HJ-NP-Za-km-z]{64,}/s)
+    expect((res.content as { text: string }[])[0]!.text).toMatch(/Opened session .*Signature: [1-9A-HJ-NP-Za-km-z]{64,}/s)
   }, 120_000)
 })

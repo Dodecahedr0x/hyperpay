@@ -14,8 +14,8 @@ categories = ["api-bindings", "cryptography::cryptocurrencies"]
 # JSON-RPC calls over reqwest rather than solana-client, which keeps the
 # dependency tree and compile time far smaller.
 solana-sdk = "2"
+sha2 = "0.10"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
 bincode = "1.3"

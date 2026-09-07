@@ -1,14 +1,19 @@
-import { Connection, PublicKey, Transaction, VersionedTransaction } from '@solana/web3.js'
+import {
+  Connection,
+  PublicKey,
+  Transaction,
+  type TransactionInstruction,
+} from '@solana/web3.js'
 import {
   ConfirmationError,
+  HyperPayError,
   ResolutionError,
   lookupKnownToken,
   tokenFamily,
-  type BuildResponse,
   type Cluster,
   type TokenInfo,
 } from '@magicblock-labs/hyperpay-types'
-import { type AnyTransaction, type HyperPaySigner } from './signer.js'
+import { type HyperPaySigner } from './signer.js'
 
 export const DEFAULT_RPC: Record<'mainnet' | 'devnet', string> = {
   mainnet: 'https://api.mainnet-beta.solana.com',
@@ -22,28 +27,13 @@ export const DEFAULT_EPHEMERAL_RPC: Record<'mainnet' | 'devnet', string> = {
 
 export function baseRpcFor(cluster: Cluster, override?: string): string {
   if (override) return override
-  // A cluster given as a URL *is* the RPC.
   if (String(cluster).startsWith('http')) return String(cluster)
   return DEFAULT_RPC[tokenFamily(cluster)]
 }
 
-/**
- * Picks the network a built transaction must be submitted to.
- *
- * This is the single most common integration bug: private transfers settle on
- * the ephemeral rollup, not the base cluster, and submitting to the wrong one
- * fails with an unhelpful "blockhash not found".
- */
-export function rpcForBuild(build: BuildResponse, cluster: Cluster, baseOverride?: string): string {
-  if (build.sendTo === 'ephemeral') {
-    return build.sendRpcEndpoint ?? DEFAULT_EPHEMERAL_RPC[tokenFamily(cluster)]
-  }
-  return baseRpcFor(cluster, baseOverride)
-}
-
-export function deserialize(build: BuildResponse): AnyTransaction {
-  const bytes = Buffer.from(build.transactionBase64, 'base64')
-  return build.version === 'v0' ? VersionedTransaction.deserialize(bytes) : Transaction.from(bytes)
+export function ephemeralRpcFor(cluster: Cluster, override?: string): string {
+  if (override) return override
+  return DEFAULT_EPHEMERAL_RPC[tokenFamily(cluster)]
 }
 
 export interface SubmitResult {
@@ -52,38 +42,61 @@ export interface SubmitResult {
   settledOn: 'base' | 'ephemeral'
 }
 
-/** Signs a built transaction, submits it to the correct RPC, and waits for confirmation. */
-export async function signAndSubmit(
-  build: BuildResponse,
-  signer: HyperPaySigner,
-  cluster: Cluster,
-  opts: {
-    baseRpcUrl?: string
-    /** Last chance to amend the transaction before it is signed. */
-    prepare?: (tx: AnyTransaction) => AnyTransaction
-  } = {},
-): Promise<SubmitResult> {
-  const required = build.requiredSigners ?? []
-  const mine = signer.publicKey.toBase58()
-  const missing = required.filter((s) => s !== mine)
-  if (missing.length) {
-    throw new ResolutionError(
-      `Transaction needs signatures HyperPay cannot provide: ${missing.join(', ')} (signer is ${mine})`,
-    )
+/** Reads account data via JSON-RPC `getAccountInfo` (base64). */
+export async function getAccountData(
+  rpcUrl: string,
+  address: PublicKey | string,
+): Promise<Buffer | null> {
+  const res = await fetch(rpcUrl, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'getAccountInfo',
+      params: [typeof address === 'string' ? address : address.toBase58(), { encoding: 'base64' }],
+    }),
+  })
+  const json = (await res.json()) as {
+    error?: { message?: string }
+    result?: { value?: { data?: [string, string] } | null }
   }
+  if (json.error) {
+    throw new HyperPayError(`getAccountInfo: ${json.error.message ?? 'unknown RPC error'}`)
+  }
+  const value = json.result?.value
+  if (!value) return null
+  const encoded = value.data?.[0]
+  if (encoded === undefined) {
+    throw new HyperPayError('getAccountInfo did not return base64 account data')
+  }
+  return Buffer.from(encoded, 'base64')
+}
 
-  const prepared = opts.prepare ? opts.prepare(deserialize(build)) : deserialize(build)
-  const tx = await signer.signTransaction(prepared)
-  const rpcUrl = rpcForBuild(build, cluster, opts.baseRpcUrl)
+/**
+ * Builds a transaction around one instruction, signs it, submits it, and waits
+ * for confirmation.
+ */
+export async function signAndSubmit(
+  ix: TransactionInstruction,
+  signer: HyperPaySigner,
+  rpcUrl: string,
+  settledOn: 'base' | 'ephemeral',
+): Promise<SubmitResult> {
   const connection = new Connection(rpcUrl, 'confirmed')
-
-  const signature = await connection.sendRawTransaction(tx.serialize(), {
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed')
+  const tx = new Transaction({
+    feePayer: signer.publicKey,
+    blockhash,
+    lastValidBlockHeight,
+  }).add(ix)
+  const signed = await signer.signTransaction(tx)
+  const signature = await connection.sendRawTransaction(signed.serialize(), {
     skipPreflight: false,
     maxRetries: 3,
   })
-
-  await confirmSignature(connection, signature, build.lastValidBlockHeight)
-  return { signature, rpcUrl, settledOn: build.sendTo }
+  await confirmSignature(connection, signature, lastValidBlockHeight)
+  return { signature, rpcUrl, settledOn }
 }
 
 /**
@@ -116,8 +129,6 @@ export async function confirmSignature(
       return
     }
 
-    // Blockhash expiry is authoritative, but checking it every loop triples our
-    // RPC calls for no benefit — once a second is enough.
     if (++heightChecks % 3 === 0 && !status) {
       const height = await connection.getBlockHeight('confirmed').catch(() => 0)
       if (height > lastValidBlockHeight) {
@@ -164,7 +175,6 @@ export class TokenResolver {
   }
 
   async resolve(spec: string): Promise<TokenInfo> {
-    // Custom registrations win over the built-in list, so callers can override.
     const cached = this.cache.get(spec) ?? this.cache.get(spec.toUpperCase())
     if (cached) return cached
 

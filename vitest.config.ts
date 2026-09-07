@@ -18,7 +18,7 @@ export default defineConfig({
       { find: '@magicblock-labs/hyperpay-core/client', replacement: src('packages/core/src/client.ts') },
       { find: '@magicblock-labs/hyperpay-core/policy', replacement: src('packages/core/src/policy.ts') },
       { find: '@magicblock-labs/hyperpay-core/signer', replacement: src('packages/core/src/signer-node.ts') },
-      { find: '@magicblock-labs/hyperpay-core/api', replacement: src('packages/core/src/api.ts') },
+      { find: '@magicblock-labs/hyperpay-core/program', replacement: src('packages/core/src/program.ts') },
       { find: '@magicblock-labs/hyperpay-core', replacement: src('packages/core/src/index.ts') },
 
       { find: '@magicblock-labs/hyperpay-types/amounts', replacement: src('packages/types/src/amounts.ts') },

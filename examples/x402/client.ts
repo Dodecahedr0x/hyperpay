@@ -12,10 +12,10 @@ import { payingFetch } from '@magicblock-labs/hyperpay/x402'
 const url = process.argv[2] ?? 'http://127.0.0.1:4021/snapshot'
 const hp = HyperPay.fromEnv()
 
+// User must hp.openSession(merchant, amount) before the merchant can charge.
 const fetchAndPay = payingFetch({
   hp,
   maxPrice: '0.05 USDC',
-  visibility: 'private',
 })
 
 console.log('paying from', hp.signer?.publicKey.toBase58())

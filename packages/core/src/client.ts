@@ -1,5 +1,4 @@
-import bs58 from 'bs58'
-import { Transaction } from '@solana/web3.js'
+import { Connection, PublicKey, type TransactionInstruction } from '@solana/web3.js'
 import {
   formatAmount,
   fromBaseUnits,
@@ -8,34 +7,54 @@ import {
   tokenFamily,
   HyperPayError,
   SignerError,
-  type BuildResponse,
   type Cluster,
   type TokenInfo,
-  type TransferRequest,
 } from '@magicblock-labs/hyperpay-types'
 import {
   TokenResolver,
+  associatedTokenAddress,
   baseRpcFor,
-  ensureRecipientAta,
+  ephemeralRpcFor,
+  getAccountData,
   signAndSubmit,
-  type AnyTransaction,
   type HyperPaySigner,
   type SubmitResult,
 } from '@magicblock-labs/hyperpay-solana'
-import { DEFAULT_API_URL, PaymentsApi, newRefId } from './api.js'
 import { Policy, type PolicyConfig } from './policy.js'
 import { envSigner, loadKey } from './runtime.js'
+import {
+  chargeIx,
+  closeSessionIx,
+  depositIx,
+  eataPda,
+  fundUserIx,
+  initUserIx,
+  openSessionIx,
+  remainingFromSessionData,
+  sessionPda,
+  userMintPda,
+  userPda,
+  withdrawIx,
+  type SessionAccounts,
+} from './program.js'
 
-export { newRefId }
-
-/**
- * A built transaction carries a blockhash that expires in ~60s. Both the RPC
- * and the API surface this differently, so match on the message.
- */
-function isStaleBlockhash(e: unknown): boolean {
-  const message = e instanceof Error ? e.message : String(e)
-  return /blockhash not found|block height exceeded|expired unconfirmed/i.test(message)
-}
+export {
+  PROGRAM_ID,
+  SESSION_REMAINING_OFFSET,
+  chargeIx,
+  closeSessionIx,
+  depositIx,
+  eataPda,
+  fundUserIx,
+  initUserIx,
+  openSessionIx,
+  remainingFromSessionData,
+  sessionPda,
+  userMintPda,
+  userPda,
+  withdrawIx,
+} from './program.js'
+export type { SessionAccounts, WithdrawAccounts } from './program.js'
 
 export interface HyperPayConfig {
   /** Bring your own signer (wallet adapter, KMS…). Takes precedence over `key`. */
@@ -45,48 +64,36 @@ export interface HyperPayConfig {
   cluster?: Cluster
   /** Override the base-layer RPC. Defaults per cluster. */
   rpcUrl?: string
-  apiUrl?: string
+  /** Override the ephemeral-rollup RPC. Defaults per cluster. */
+  ephemeralRpcUrl?: string
   policy?: Policy | PolicyConfig
   /** Token used when an amount omits its symbol. Defaults to USDC. */
   defaultToken?: string
   /** Names custom mints so amounts and spend caps can refer to them by symbol. */
   tokens?: TokenInfo[]
-  authToken?: string
 }
 
-export interface PayOptions {
+export interface SessionOptions {
   /** Symbol or mint address. Overrides the symbol in the amount string. */
   token?: string
-  /** Defaults to `private`. */
-  visibility?: 'public' | 'private'
-  from?: 'base' | 'ephemeral'
-  to?: 'base' | 'ephemeral'
-  memo?: string
-  /** Correlation id. Must be a non-negative integer string; generated if omitted. */
-  refId?: string
-  /** Fan across 1–15 queue entries to weaken amount correlation. */
-  split?: number
-  /** `[min, max]` settlement delay in ms, for private transfers. */
-  delayMs?: [number, number]
-  /** Sponsor pays SOL fees; you reimburse in token. Minimum 0.5 USDC/USDT. */
-  gasless?: boolean
-  /** Recipient receives exactly `amount` after fees. */
-  exactOut?: boolean
+  /** MagicBlock session token account. Never pass a user's token to a merchant `charge`. */
+  sessionToken?: string
+  /**
+   * Wallet that owns the User PDA (`["user", wallet]`).
+   * Required when the signer is a session key — do not derive the User PDA from the session key.
+   */
+  authority?: string | PublicKey
 }
 
 export interface Payment {
   signature: string
-  refId?: string
   to: string
   /** Human form, e.g. `"10 USDC"`. */
   amount: string
   units: string
   token: TokenInfo
-  visibility: 'public' | 'private'
   settledOn: 'base' | 'ephemeral'
   rpcUrl: string
-  fees?: { lamports: string; tokens: string }
-  /** Absent for ephemeral settlement — private transfers are not publicly indexed. */
   explorerUrl?: string
 }
 
@@ -95,45 +102,42 @@ export interface Quote {
   amount: string
   units: string
   token: TokenInfo
-  visibility: 'public' | 'private'
   settlesOn: 'base' | 'ephemeral'
-  instructionCount: number
-  fees?: { lamports: string; tokens: string }
-  refId?: string
 }
 
 export interface Balances {
   address: string
   token: TokenInfo
-  /** On the Solana base layer. */
+  /** Session remaining (for `sessionBalance`) or ATA balance (for `balance`). */
   base: string
-  /** Inside the ephemeral rollup. `undefined` when no signer can authenticate. */
-  private?: string
   baseUnits: string
-  privateUnits?: string
 }
 
 /**
- * The whole payment system, in one object.
+ * Client for the HyperPay payment-session program.
  *
  * ```ts
- * const hp = HyperPay.fromEnv()
- * await hp.pay('alice@magicblock.id', '10 USDC')
+ * const user = HyperPay.fromEnv()
+ * await user.initUser(1_000_000n)
+ * await user.openSession(merchant, '10 USDC')
+ *
+ * const merchantHp = new HyperPay({ key: merchantKey, cluster: 'devnet' })
+ * await merchantHp.charge(userWallet, '1 USDC')
  * ```
  */
 export class HyperPay {
   readonly cluster: Cluster
-  readonly api: PaymentsApi
   readonly policy: Policy
   readonly signer?: HyperPaySigner
   readonly rpcUrl: string
+  readonly ephemeralRpcUrl: string
   private readonly tokens: TokenResolver
   private readonly defaultToken: string
 
   constructor(config: HyperPayConfig = {}) {
     this.cluster = config.cluster ?? 'mainnet'
     this.rpcUrl = baseRpcFor(this.cluster, config.rpcUrl)
-    this.api = new PaymentsApi({ baseUrl: config.apiUrl, authToken: config.authToken })
+    this.ephemeralRpcUrl = ephemeralRpcFor(this.cluster, config.ephemeralRpcUrl)
     this.signer = config.signer ?? (config.key ? loadKey(config.key) : undefined)
     this.policy =
       config.policy instanceof Policy ? config.policy : new Policy(config.policy ?? {})
@@ -143,7 +147,7 @@ export class HyperPay {
 
   /**
    * Builds a client from environment variables:
-   * `HYPERPAY_KEY`, `HYPERPAY_CLUSTER`, `HYPERPAY_RPC`, `HYPERPAY_API`,
+   * `HYPERPAY_KEY`, `HYPERPAY_CLUSTER`, `HYPERPAY_RPC`, `HYPERPAY_EPHEMERAL_RPC`,
    * `HYPERPAY_TOKEN`, plus the policy vars read by `Policy.fromEnv`.
    */
   static fromEnv(overrides: HyperPayConfig = {}, env: NodeJS.ProcessEnv = process.env): HyperPay {
@@ -151,7 +155,7 @@ export class HyperPay {
       signer: envSigner(env),
       cluster: (env.HYPERPAY_CLUSTER as Cluster) ?? 'mainnet',
       rpcUrl: env.HYPERPAY_RPC,
-      apiUrl: env.HYPERPAY_API ?? DEFAULT_API_URL,
+      ephemeralRpcUrl: env.HYPERPAY_EPHEMERAL_RPC,
       defaultToken: env.HYPERPAY_TOKEN,
       tokens: parseTokensEnv(env.HYPERPAY_TOKENS),
       policy: Policy.fromEnv(env),
@@ -159,249 +163,247 @@ export class HyperPay {
     })
   }
 
-  /** Resolves `"10 USDC"` (or `"10"` + `opts.token`) into a concrete token and base units. */
-  async resolveAmount(amount: string | number | bigint, tokenSpec?: string) {
+  /**
+   * Resolves `"10 USDC"` (or `"10"` + `tokenSpec`) into a concrete token and base units.
+   * `openSession` may pass `{ allowZero: true }` so a session can be created empty.
+   */
+  async resolveAmount(
+    amount: string | number | bigint,
+    tokenSpec?: string,
+    opts: { allowZero?: boolean } = {},
+  ) {
     const { value, symbol } = parseMoney(amount)
     const token = await this.tokens.resolve(tokenSpec ?? symbol ?? this.defaultToken)
     const units = toBaseUnits(value, token.decimals)
-    if (units <= 0n) throw new HyperPayError(`Payment amount must be greater than zero`)
-    if (units > BigInt(Number.MAX_SAFE_INTEGER)) {
-      throw new HyperPayError(
-        `Amount ${formatAmount(units, token)} exceeds the maximum the payments API accepts`,
-      )
+    if (units < 0n || (units === 0n && !opts.allowZero)) {
+      throw new HyperPayError(`Payment amount must be greater than zero`)
+    }
+    if (units > 0xffff_ffff_ffff_ffffn) {
+      throw new HyperPayError(`Amount ${formatAmount(units, token)} exceeds u64`)
     }
     return { token, units }
   }
 
-  /**
-   * Pay someone. Private by default.
-   *
-   * `to` is a pubkey or a stealth handle (`alice@magicblock.id`). The handle
-   * must already have a stealth pool, or the API rejects the transfer.
-   *
-   * Private payments spend rollup balance. If that is short and `from` is not
-   * `'base'`, the shortfall is deposited from the base layer first.
-   */
-  async pay(to: string, amount: string | number | bigint, opts: PayOptions = {}): Promise<Payment> {
-    const { token, units, visibility, refId, request } = await this.quoteTransfer(to, amount, opts)
-    if (visibility === 'private' && opts.from !== 'base') {
-      await this.fundPrivate(token, units)
-    }
-
-    const { built: build, result } = await this.buildAndSubmit(
-      () => this.api.transfer(request),
-      // Only public transfers need this: private ones settle through the
-      // rollup, which creates the destination account itself.
-      visibility === 'public'
-        ? (tx) =>
-            tx instanceof Transaction
-              ? ensureRecipientAta(tx, this.requireSigner().publicKey, to, token.mint)
-              : tx
-        : undefined,
-    )
-    const { signature, rpcUrl, settledOn } = result
-    this.policy.record({ to, token, units })
-
+  /** User PDA accounts for a wallet authority — never derived from a session-key signer. */
+  sessionAccounts(args: { authority: PublicKey; merchant: PublicKey; mint: PublicKey }): SessionAccounts {
+    const [user] = userPda(args.authority)
+    const [userMint] = userMintPda(user, args.mint)
+    const [session] = sessionPda(user, args.merchant, args.mint)
+    const [userEata] = eataPda(user, args.mint)
     return {
-      signature,
-      refId,
-      to,
-      amount: formatAmount(units, token),
-      units: units.toString(),
+      user,
+      signer: this.requireSigner().publicKey,
+      userMint,
+      session,
+      merchant: args.merchant,
+      mint: args.mint,
+      userEata,
+    }
+  }
+
+  /** Creates the User PDA on the base cluster and funds it with lamports. */
+  async initUser(lamports: bigint | number): Promise<Payment> {
+    const units = BigInt(lamports)
+    if (units <= 0n) throw new HyperPayError('Payment amount must be greater than zero')
+    const authority = this.requireSigner().publicKey
+    const [user] = userPda(authority)
+    return this.submit(
+      initUserIx(user, authority, units),
+      this.rpcUrl,
+      'base',
+      authority.toBase58(),
+      units,
+      lamportToken(),
+    )
+  }
+
+  /** Tops up the User PDA with lamports. Wallet or a user session token. */
+  async fundUser(lamports: bigint | number, opts: SessionOptions = {}): Promise<Payment> {
+    const units = BigInt(lamports)
+    if (units <= 0n) throw new HyperPayError('Payment amount must be greater than zero')
+    const signer = this.requireSigner().publicKey
+    const [user] = userPda(this.walletAuthority(opts))
+    return this.submit(
+      fundUserIx(user, signer, units, optionalPubkey(opts.sessionToken)),
+      this.rpcUrl,
+      'base',
+      signer.toBase58(),
+      units,
+      lamportToken(),
+    )
+  }
+
+  /** Opens a session with `merchant`. Amount may be 0. */
+  async openSession(
+    merchant: string,
+    amount: string | number | bigint = 0,
+    opts: SessionOptions = {},
+  ): Promise<Payment> {
+    const { token, units } = await this.resolveAmount(amount, opts.token, { allowZero: true })
+    if (units > 0n) this.policy.check({ to: merchant, token, units })
+    const accounts = this.sessionAccounts({
+      authority: this.walletAuthority(opts),
+      merchant: new PublicKey(merchant),
+      mint: new PublicKey(token.mint),
+    })
+    return this.submit(
+      openSessionIx(accounts, units, optionalPubkey(opts.sessionToken)),
+      this.ephemeralRpcUrl,
+      'ephemeral',
+      merchant,
+      units,
       token,
-      visibility,
-      settledOn,
-      rpcUrl,
-      fees: build.fees,
-      explorerUrl: settledOn === 'base' ? this.explorerUrl(signature) : undefined,
-    }
+    )
   }
 
-  /** Same as `pay`, but returns the quote instead of sending. */
-  async quote(to: string, amount: string | number | bigint, opts: PayOptions = {}): Promise<Quote> {
-    const { token, units, visibility, refId, request } = await this.quoteTransfer(to, amount, opts)
-    const build = await this.api.transfer(request)
-    return {
-      to,
-      amount: formatAmount(units, token),
-      units: units.toString(),
+  /** Reserves more of the user eATA into an existing session. */
+  async deposit(
+    merchant: string,
+    amount: string | number | bigint,
+    opts: SessionOptions = {},
+  ): Promise<Payment> {
+    const { token, units } = await this.resolveAmount(amount, opts.token)
+    this.policy.check({ to: merchant, token, units })
+    const accounts = this.sessionAccounts({
+      authority: this.walletAuthority(opts),
+      merchant: new PublicKey(merchant),
+      mint: new PublicKey(token.mint),
+    })
+    return this.submit(
+      depositIx(accounts, units, optionalPubkey(opts.sessionToken)),
+      this.ephemeralRpcUrl,
+      'ephemeral',
+      merchant,
+      units,
       token,
-      visibility,
-      settlesOn: build.sendTo,
-      instructionCount: build.instructionCount,
-      fees: build.fees,
-      refId,
-    }
-  }
-
-  /**
-   * Private payments spend rollup tokens. If the rollup is short, move the
-   * shortfall from the base layer and wait until it is spendable.
-   */
-  private async fundPrivate(token: TokenInfo, units: bigint): Promise<void> {
-    // ponytail: 0.1% ceil matches the API private fee; deposit that extra so pay doesn't fail on fee.
-    const need = units + (units + 999n) / 1000n
-    const balances = await this.balance({ token: token.mint })
-    const have = BigInt(balances.privateUnits ?? '0')
-    if (have >= need) return
-
-    const shortfall = need - have
-    if (BigInt(balances.baseUnits) < shortfall) {
-      throw new HyperPayError(
-        `Need ${formatAmount(need, token)} on the rollup to pay privately, but only ${fromBaseUnits(have, token.decimals)} ${token.symbol} is there and ${balances.base} ${token.symbol} is on the base layer.`,
-      )
-    }
-
-    await this.initializeMint(token.mint)
-    await this.deposit(formatAmount(shortfall, token), { token: token.mint })
-
-    const deadline = Date.now() + 45_000
-    while (Date.now() < deadline) {
-      const next = await this.balance({ token: token.mint })
-      if (BigInt(next.privateUnits ?? '0') >= need) return
-      await new Promise((r) => setTimeout(r, 1_000))
-    }
-    throw new HyperPayError(
-      `Deposited ${formatAmount(shortfall, token)} onto the rollup, but the private balance has not landed yet. Wait a few seconds and retry.`,
     )
   }
 
-  /** Moves tokens from the base layer into the ephemeral rollup. */
-  async deposit(amount: string | number | bigint, opts: { token?: string } = {}): Promise<Payment> {
-    const owner = this.requireSigner().publicKey.toBase58()
+  /**
+   * Debit the user's ER session. Signs with the merchant key.
+   *
+   * The merchant must omit the session token — do not give a user's session
+   * key to a merchant. The user must `openSession` first.
+   */
+  async charge(user: string, amount: string | number | bigint, opts: { token?: string } = {}): Promise<Payment> {
     const { token, units } = await this.resolveAmount(amount, opts.token)
-    const { built, result } = await this.buildAndSubmit(() =>
-      this.api.deposit({
-        owner,
-        mint: token.mint,
-        amount: Number(units),
-        cluster: this.cluster,
-        initIfMissing: true,
-        initVaultIfMissing: true,
-        initAtasIfMissing: true,
-      }),
+    const merchant = this.requireSigner().publicKey
+    this.policy.check({ to: merchant.toBase58(), token, units })
+    const mint = new PublicKey(token.mint)
+    const accounts = this.sessionAccounts({
+      authority: new PublicKey(user),
+      merchant,
+      mint,
+    })
+    const [merchantEata] = eataPda(merchant, mint)
+    return this.submit(
+      chargeIx(accounts, merchantEata, units),
+      this.ephemeralRpcUrl,
+      'ephemeral',
+      merchant.toBase58(),
+      units,
+      token,
     )
-    return this.receipt('deposit', owner, token, units, built, result)
   }
 
-  /** Moves tokens from the ephemeral rollup back to the base layer. */
-  async withdraw(amount: string | number | bigint, opts: { token?: string } = {}): Promise<Payment> {
-    const owner = this.requireSigner().publicKey.toBase58()
+  /** Unreserves remaining and closes the session. User-only. */
+  async closeSession(merchant: string, opts: SessionOptions = {}): Promise<Payment> {
+    const token = await this.tokens.resolve(opts.token ?? this.defaultToken)
+    const accounts = this.sessionAccounts({
+      authority: this.walletAuthority(opts),
+      merchant: new PublicKey(merchant),
+      mint: new PublicKey(token.mint),
+    })
+    return this.submit(
+      closeSessionIx(accounts, optionalPubkey(opts.sessionToken)),
+      this.ephemeralRpcUrl,
+      'ephemeral',
+      merchant,
+      0n,
+      token,
+    )
+  }
+
+  /** Moves unreserved eATA tokens to `destination`'s eATA (defaults to the signer). */
+  async withdraw(
+    amount: string | number | bigint,
+    opts: SessionOptions & { destination?: string } = {},
+  ): Promise<Payment> {
     const { token, units } = await this.resolveAmount(amount, opts.token)
-    const { built, result } = await this.buildAndSubmit(() =>
-      this.api.withdraw({
-        owner,
-        mint: token.mint,
-        amount: Number(units),
-        cluster: this.cluster,
-        initIfMissing: true,
-        initAtasIfMissing: true,
-      }),
+    const signer = this.requireSigner().publicKey
+    const destOwner = opts.destination ? new PublicKey(opts.destination) : signer
+    this.policy.check({ to: destOwner.toBase58(), token, units })
+    const mint = new PublicKey(token.mint)
+    const [user] = userPda(this.walletAuthority(opts))
+    const [userMint] = userMintPda(user, mint)
+    const [userEata] = eataPda(user, mint)
+    const [destination] = eataPda(destOwner, mint)
+    return this.submit(
+      withdrawIx(
+        { user, signer, userMint, mint, userEata, destination },
+        units,
+        optionalPubkey(opts.sessionToken),
+      ),
+      this.ephemeralRpcUrl,
+      'ephemeral',
+      destOwner.toBase58(),
+      units,
+      token,
     )
-    return this.receipt('withdraw', owner, token, units, built, result)
   }
 
-  /**
-   * Gives a mint a transfer queue on the ephemeral validator. Required once per
-   * mint before anyone can send it privately; a no-op if already done.
-   */
-  async initializeMint(tokenSpec?: string): Promise<{ mint: string; signature?: string; alreadyInitialized: boolean }> {
-    const token = await this.tokens.resolve(tokenSpec ?? this.defaultToken)
-    const status = await this.api.isMintInitialized(token.mint, this.cluster)
-    if (status.initialized) return { mint: token.mint, alreadyInitialized: true }
-
-    const payer = this.requireSigner().publicKey.toBase58()
-    const { result } = await this.buildAndSubmit(() =>
-      this.api.initializeMint({ mint: token.mint, cluster: this.cluster, payer }),
-    )
-    return { mint: token.mint, signature: result.signature, alreadyInitialized: false }
-  }
-
-  /**
-   * Remaining units on the ER session with this merchant.
-   * The merchant is this wallet. The mint is the default token.
-   */
+  /** Remaining units on the ER session between `user` (wallet) and this merchant. */
   async sessionBalance(user: string): Promise<Balances> {
-    const merchant = this.requireSigner().publicKey.toBase58()
     const token = await this.tokens.resolve(this.defaultToken)
-    const response = await this.api.sessionBalance(user, merchant, token.mint, this.cluster)
+    const merchant = this.requireSigner().publicKey
+    const userWallet = new PublicKey(user)
+    const mint = new PublicKey(token.mint)
+    const [userAccount] = userPda(userWallet)
+    const [session] = sessionPda(userAccount, merchant, mint)
+    const data = await getAccountData(this.ephemeralRpcUrl, session)
+    const units = (data && remainingFromSessionData(data)) ?? 0n
     return {
       address: user,
       token,
-      base: fromBaseUnits(BigInt(response.balance), token.decimals),
-      baseUnits: response.balance,
+      base: fromBaseUnits(units, token.decimals),
+      baseUnits: units.toString(),
     }
   }
 
-  /**
-   * Debits the user's ER session. The merchant signer signs the debit.
-   * Visibility is private.
-   */
-  async charge(user: string, amount: string | number | bigint): Promise<Payment> {
-    const merchant = this.requireSigner().publicKey.toBase58()
-    const { token, units } = await this.resolveAmount(amount)
+  /** Policy-check and resolve an amount without submitting. */
+  async quote(
+    merchant: string,
+    amount: string | number | bigint,
+    opts: { token?: string } = {},
+  ): Promise<Quote> {
+    const { token, units } = await this.resolveAmount(amount, opts.token)
     this.policy.check({ to: merchant, token, units })
-    const { built, result } = await this.buildAndSubmit(() =>
-      this.api.charge({
-        user,
-        merchant,
-        mint: token.mint,
-        amount: Number(units),
-        cluster: this.cluster,
-        visibility: 'private',
-      }),
-    )
     return {
-      signature: result.signature,
       to: merchant,
       amount: formatAmount(units, token),
       units: units.toString(),
       token,
-      visibility: 'private',
-      settledOn: result.settledOn,
-      rpcUrl: result.rpcUrl,
-      fees: built.fees,
-      explorerUrl: result.settledOn === 'base' ? this.explorerUrl(result.signature) : undefined,
+      settlesOn: 'ephemeral',
     }
   }
 
-  /** Base-layer and (when authenticated) ephemeral balances. */
+  /** Base-layer ATA balance for a wallet. */
   async balance(opts: { token?: string; address?: string } = {}): Promise<Balances> {
     const address = opts.address ?? this.requireSigner().publicKey.toBase58()
     const token = await this.tokens.resolve(opts.token ?? this.defaultToken)
-
-    const base = await this.api.balance(address, token.mint, this.cluster)
-    let priv: string | undefined
+    const ata = associatedTokenAddress(new PublicKey(token.mint), new PublicKey(address))
+    const connection = new Connection(this.rpcUrl, 'confirmed')
     try {
-      await this.login()
-      priv = (await this.api.privateBalance(address, token.mint, this.cluster)).balance
+      const bal = await connection.getTokenAccountBalance(ata)
+      return {
+        address,
+        token,
+        base: fromBaseUnits(BigInt(bal.value.amount), token.decimals),
+        baseUnits: bal.value.amount,
+      }
     } catch {
-      // Private balance needs a signer and a live session; absence is not an error.
+      return { address, token, base: '0', baseUnits: '0' }
     }
-
-    return {
-      address,
-      token,
-      base: fromBaseUnits(BigInt(base.balance), token.decimals),
-      baseUnits: base.balance,
-      private: priv === undefined ? undefined : fromBaseUnits(BigInt(priv), token.decimals),
-      privateUnits: priv,
-    }
-  }
-
-  /** Authenticates for private reads. Idempotent; caches the bearer token. */
-  async login(): Promise<string> {
-    if (this.api.authToken) return this.api.authToken
-    const signer = this.requireSigner()
-    if (!signer.signMessage) {
-      throw new SignerError('This signer cannot sign messages, so private balances are unavailable')
-    }
-    const pubkey = signer.publicKey.toBase58()
-    const { challenge } = await this.api.challenge(pubkey)
-    const signature = bs58.encode(await signer.signMessage(new TextEncoder().encode(challenge)))
-    const { token } = await this.api.login(pubkey, challenge, signature)
-    this.api.authToken = token
-    return token
   }
 
   explorerUrl(signature: string): string {
@@ -409,106 +411,35 @@ export class HyperPay {
     return `https://explorer.solana.com/tx/${signature}${suffix}`
   }
 
-  /** Resolve, policy-check, and build the transfer request — shared by `pay` and `quote`. */
-  private async quoteTransfer(to: string, amount: string | number | bigint, opts: PayOptions) {
-    const { token, units } = await this.resolveAmount(amount, opts.token)
-    const visibility = opts.visibility ?? 'private'
-
-    // Policy runs before anything is built or signed: a rejected payment must
-    // leave no transaction in existence.
-    this.policy.check({ to, token, units })
-
-    const refId = opts.refId ?? (visibility === 'private' ? newRefId() : undefined)
-    const request = this.transferRequest(to, token, units, visibility, refId, opts)
-    return { token, units, visibility, refId, request }
+  private walletAuthority(opts: { authority?: string | PublicKey } = {}): PublicKey {
+    if (opts.authority instanceof PublicKey) return opts.authority
+    if (typeof opts.authority === 'string') return new PublicKey(opts.authority)
+    return this.requireSigner().publicKey
   }
 
-  private transferRequest(
+  private async submit(
+    ix: TransactionInstruction,
+    rpcUrl: string,
+    settledOn: 'base' | 'ephemeral',
     to: string,
-    token: TokenInfo,
     units: bigint,
-    visibility: 'public' | 'private',
-    refId: string | undefined,
-    opts: PayOptions,
-  ): TransferRequest {
-    return {
-      from: this.requireSigner().publicKey.toBase58(),
-      to,
-      mint: token.mint,
-      amount: Number(units),
-      cluster: this.cluster,
-      visibility,
-      fromBalance: opts.from,
-      toBalance: opts.to,
-      memo: opts.memo,
-      clientRefId: refId,
-      split: opts.split,
-      minDelayMs: opts.delayMs ? String(opts.delayMs[0]) : undefined,
-      maxDelayMs: opts.delayMs ? String(opts.delayMs[1]) : undefined,
-      gasless: opts.gasless,
-      exactOut: opts.exactOut,
-      // Creating missing token accounts is what makes a first payment to a new
-      // recipient work at all. `initVaultIfMissing` is deliberately absent:
-      // it adds three more instructions and pushes the transaction past the
-      // 1232-byte limit. Vault setup belongs to initializeMint()/deposit().
-      initIfMissing: true,
-      initAtasIfMissing: true,
-    }
-  }
-
-  private submit(build: BuildResponse, prepare?: (tx: AnyTransaction) => AnyTransaction) {
-    return signAndSubmit(build, this.requireSigner(), this.cluster, {
-      baseRpcUrl: this.rpcUrl,
-      prepare,
-    })
-  }
-
-  /**
-   * Builds and submits, rebuilding once if the blockhash went stale.
-   *
-   * The API stamps a blockhash at build time; on a slow network or a busy
-   * cluster it can expire before we submit. Retrying the *submit* would be
-   * useless — the fix is a fresh build.
-   */
-  private async buildAndSubmit(
-    build: () => Promise<BuildResponse>,
-    prepare?: (tx: AnyTransaction) => AnyTransaction,
-  ) {
-    let last: unknown
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const built = await build()
-      try {
-        return { built, result: await this.submit(built, prepare) }
-      } catch (e) {
-        if (!isStaleBlockhash(e)) throw e
-        last = e
-      }
-    }
-    throw new HyperPayError(
-      `Could not land the transaction: its blockhash expired three times in a row. The network is likely congested.`,
-      last,
-    )
-  }
-
-  private receipt(
-    kind: string,
-    to: string,
     token: TokenInfo,
-    units: bigint,
-    build: BuildResponse,
-    { signature, rpcUrl, settledOn }: SubmitResult,
-  ): Payment {
+  ): Promise<Payment> {
+    const result = await signAndSubmit(ix, this.requireSigner(), rpcUrl, settledOn)
+    if (units > 0n) this.policy.record({ to, token, units })
+    return this.receipt(to, token, units, result)
+  }
+
+  private receipt(to: string, token: TokenInfo, units: bigint, result: SubmitResult): Payment {
     return {
-      signature,
+      signature: result.signature,
       to,
-      amount: formatAmount(units, token),
+      amount: token.symbol === 'SOL' && token.mint.startsWith('So111') ? `${units} lamports` : formatAmount(units, token),
       units: units.toString(),
       token,
-      visibility: kind === 'deposit' ? 'private' : 'public',
-      settledOn,
-      rpcUrl,
-      fees: build.fees,
-      explorerUrl: settledOn === 'base' ? this.explorerUrl(signature) : undefined,
+      settledOn: result.settledOn,
+      rpcUrl: result.rpcUrl,
+      explorerUrl: result.settledOn === 'base' ? this.explorerUrl(result.signature) : undefined,
     }
   }
 
@@ -522,12 +453,19 @@ export class HyperPay {
   }
 }
 
+function lamportToken(): TokenInfo {
+  return { symbol: 'SOL', mint: 'So11111111111111111111111111111111111111112', decimals: 9 }
+}
+
+function optionalPubkey(value?: string): PublicKey | undefined {
+  return value ? new PublicKey(value) : undefined
+}
+
 /**
  * Parses `HYPERPAY_TOKENS="TEST:<mint>:6,FOO:<mint>:9"`.
  *
  * Lives here rather than in the CLI so that every entry point — SDK, CLI, MCP —
- * honours the same variable. Duplicating it meant `HyperPay.fromEnv()` silently
- * ignored custom mints.
+ * honours the same variable.
  */
 export function parseTokensEnv(spec?: string): TokenInfo[] {
   if (!spec) return []

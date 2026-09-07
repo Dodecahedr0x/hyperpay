@@ -19,25 +19,24 @@ import { createConnectingWallet } from './connecting-wallet.js'
 
 const USDC = { mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', symbol: 'USDC', decimals: 6 }
 
+const MERCHANT = '9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM'
+
 const payment: Payment = {
   signature: 'sig111',
-  to: 'alice@magicblock.id',
+  to: MERCHANT,
   amount: '10 USDC',
   units: '10000000',
   token: USDC,
-  visibility: 'private',
   settledOn: 'ephemeral',
   rpcUrl: 'https://devnet.magicblock.app',
 }
 
 const quote: Quote = {
-  to: 'alice@magicblock.id',
+  to: MERCHANT,
   amount: '10 USDC',
   units: '10000000',
   token: USDC,
-  visibility: 'private',
   settlesOn: 'ephemeral',
-  instructionCount: 3,
 }
 
 function mockPublicKey(address = 'payer'): HyperPaySigner['publicKey'] {
@@ -57,15 +56,14 @@ function mockClient(overrides: Partial<HyperPay> = {}): HyperPay {
   return {
     cluster: 'devnet',
     signer: mockSigner(),
-    pay: vi.fn().mockResolvedValue(payment),
+    openSession: vi.fn().mockResolvedValue(payment),
+    charge: vi.fn().mockResolvedValue(payment),
     quote: vi.fn().mockResolvedValue(quote),
     balance: vi.fn().mockResolvedValue({
       address: 'payer',
       token: USDC,
       base: '100',
-      private: '40',
       baseUnits: '100000000',
-      privateUnits: '40000000',
     }),
     ...overrides,
   } as unknown as HyperPay
@@ -136,30 +134,30 @@ describe('PayButton', () => {
     const onSettled = vi.fn()
     render(
       <HyperPayProvider client={client}>
-        <PayButton to="alice@magicblock.id" amount="10 USDC" onSettled={onSettled} />
+        <PayButton to={MERCHANT} amount="10 USDC" onSettled={onSettled} />
       </HyperPayProvider>,
     )
-    fireEvent.click(screen.getByRole('button', { name: /pay 10 usdc/i }))
-    await waitFor(() => expect(client.pay).toHaveBeenCalledWith('alice@magicblock.id', '10 USDC', undefined))
+    fireEvent.click(screen.getByRole('button', { name: /open session 10 usdc/i }))
+    await waitFor(() => expect(client.openSession).toHaveBeenCalledWith(MERCHANT, '10 USDC', undefined))
     await waitFor(() => expect(onSettled).toHaveBeenCalledWith(payment))
   })
 
   it('disables the button while a payment is in flight', async () => {
     let finish: (value: Payment) => void = () => {}
     const client = mockClient({
-      pay: vi.fn(
+      openSession: vi.fn(
         () =>
           new Promise<Payment>((resolve) => {
             finish = resolve
           }),
-      ) as HyperPay['pay'],
+      ) as HyperPay['openSession'],
     })
     render(
       <HyperPayProvider client={client}>
-        <PayButton to="alice@magicblock.id" amount="10 USDC" />
+        <PayButton to={MERCHANT} amount="10 USDC" />
       </HyperPayProvider>,
     )
-    const button = screen.getByRole('button', { name: /pay 10 usdc/i })
+    const button = screen.getByRole('button', { name: /open session 10 usdc/i })
     fireEvent.click(button)
     await waitFor(() => expect(button).toHaveProperty('disabled', true))
     finish(payment)
@@ -170,13 +168,13 @@ describe('PayButton', () => {
     const client = mockClient({ signer: undefined })
     render(
       <HyperPayProvider client={client}>
-        <PayButton to="alice@magicblock.id" amount="10 USDC" />
+        <PayButton to={MERCHANT} amount="10 USDC" />
       </HyperPayProvider>,
     )
     const button = screen.getByRole('button', { name: /connect wallet/i })
     expect(button).toHaveProperty('disabled', true)
     fireEvent.click(button)
-    expect(client.pay).not.toHaveBeenCalled()
+    expect(client.openSession).not.toHaveBeenCalled()
   })
 })
 
@@ -188,7 +186,7 @@ describe('PayModal', () => {
       <HyperPayProvider client={client}>
         <PayModal
           open
-          to="alice@magicblock.id"
+          to={MERCHANT}
           amount="10 USDC"
           onClose={() => {}}
           onSettled={onSettled}
@@ -198,14 +196,14 @@ describe('PayModal', () => {
     await waitFor(() => expect(client.quote).toHaveBeenCalled())
     expect(screen.getByRole('dialog')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: /confirm/i }))
-    await waitFor(() => expect(client.pay).toHaveBeenCalled())
+    await waitFor(() => expect(client.openSession).toHaveBeenCalled())
     await waitFor(() => expect(onSettled).toHaveBeenCalledWith(payment))
   })
 
   it('renders nothing when closed', () => {
     render(
       <Probe>
-        <PayModal open={false} to="alice@magicblock.id" amount="10 USDC" onClose={() => {}} />
+        <PayModal open={false} to={MERCHANT} amount="10 USDC" onClose={() => {}} />
       </Probe>,
     )
     expect(screen.queryByRole('dialog')).toBeNull()
@@ -215,7 +213,7 @@ describe('PayModal', () => {
     const onClose = vi.fn()
     render(
       <Probe>
-        <PayModal open to="alice@magicblock.id" amount="10 USDC" onClose={onClose} />
+        <PayModal open to={MERCHANT} amount="10 USDC" onClose={onClose} />
       </Probe>,
     )
     await waitFor(() => expect(screen.getByRole('dialog')).toBeTruthy())
@@ -225,10 +223,10 @@ describe('PayModal', () => {
 
   it('reports pay failures through onError', async () => {
     const onError = vi.fn()
-    const client = mockClient({ pay: vi.fn().mockRejectedValue(new Error('no funds')) })
+    const client = mockClient({ openSession: vi.fn().mockRejectedValue(new Error('no funds')) })
     render(
       <HyperPayProvider client={client}>
-        <PayModal open to="alice@magicblock.id" amount="10 USDC" onClose={() => {}} onError={onError} />
+        <PayModal open to={MERCHANT} amount="10 USDC" onClose={() => {}} onError={onError} />
       </HyperPayProvider>,
     )
     await waitFor(() => expect(client.quote).toHaveBeenCalled())
@@ -239,7 +237,7 @@ describe('PayModal', () => {
   it('traps Tab focus inside the dialog', async () => {
     render(
       <Probe>
-        <PayModal open to="alice@magicblock.id" amount="10 USDC" onClose={() => {}} />
+        <PayModal open to={MERCHANT} amount="10 USDC" onClose={() => {}} />
       </Probe>,
     )
     await waitFor(() => expect(screen.getByRole('dialog')).toBeTruthy())
@@ -268,16 +266,16 @@ describe('PaymentStatus', () => {
 })
 
 describe('usePay', () => {
-  it('records success and error from pay()', async () => {
+  it('records success and error from openSession()', async () => {
     const client = mockClient()
     function Capture() {
-      const { pay, status, payment, error } = usePay()
+      const { openSession, status, payment, error } = usePay()
       return (
         <div>
           <span>{status}</span>
           <span>{payment?.signature ?? ''}</span>
           <span>{error?.message ?? ''}</span>
-          <button type="button" onClick={() => void pay('alice@magicblock.id', '10 USDC').catch(() => {})}>
+          <button type="button" onClick={() => void openSession(MERCHANT, '10 USDC').catch(() => {})}>
             go
           </button>
         </div>
@@ -293,7 +291,7 @@ describe('usePay', () => {
     await waitFor(() => expect(screen.getByText('success')).toBeTruthy())
     expect(screen.getByText('sig111')).toBeTruthy()
 
-    const failing = mockClient({ pay: vi.fn().mockRejectedValue(new Error('no funds')) })
+    const failing = mockClient({ openSession: vi.fn().mockRejectedValue(new Error('no funds')) })
     rerender(
       <HyperPayProvider client={failing}>
         <Capture />
@@ -322,50 +320,21 @@ describe('useBalance', () => {
     expect(client.balance).toHaveBeenCalled()
   })
 
-  it('treats private balance as unavailable when signMessage is missing', async () => {
+  it('surfaces a balance() failure', async () => {
     const client = mockClient({
-      signer: mockSigner({ signMessage: undefined }),
-      balance: vi.fn().mockResolvedValue({
-        address: 'payer',
-        token: USDC,
-        base: '100',
-        baseUnits: '100000000',
-      }),
+      balance: vi.fn().mockRejectedValue(new Error('rpc down')),
     })
     function Show() {
-      const { balances, loading, error } = useBalance()
+      const { loading, error } = useBalance()
       if (loading) return <span>loading</span>
-      if (error) return <span>{error.message}</span>
-      return <span>{`base:${balances?.base ?? 'none'} private:${balances?.private ?? 'unavailable'}`}</span>
+      return <span>{error ? `failed:${error.message}` : 'ok'}</span>
     }
     render(
       <HyperPayProvider client={client}>
         <Show />
       </HyperPayProvider>,
     )
-    await waitFor(() => expect(screen.getByText('base:100 private:unavailable')).toBeTruthy())
-  })
-
-  it('does not hard-fail when balance() rejects because signMessage is missing', async () => {
-    const client = mockClient({
-      signer: mockSigner({ signMessage: undefined }),
-      balance: vi.fn().mockRejectedValue(
-        new Error('This signer cannot sign messages, so private balances are unavailable'),
-      ),
-    })
-    function Show() {
-      const { balances, loading, error } = useBalance()
-      if (loading) return <span>loading</span>
-      return (
-        <span>{error ? `failed:${error.message}` : `ok private:${balances?.private ?? 'unavailable'}`}</span>
-      )
-    }
-    render(
-      <HyperPayProvider client={client}>
-        <Show />
-      </HyperPayProvider>,
-    )
-    await waitFor(() => expect(screen.getByText('ok private:unavailable')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('failed:rpc down')).toBeTruthy())
   })
 })
 
@@ -443,13 +412,13 @@ describe('useWalletSigner', () => {
 })
 
 describe('wallet lifecycle', () => {
-  it('shows Connect wallet until the adapter connects, then Pay', () => {
+  it('shows Connect wallet until the adapter connects, then Open session', () => {
     const wallet = createConnectingWallet()
     function Harness() {
       const [, setTick] = useState(0)
       return (
         <HyperPayProvider cluster="devnet" wallet={wallet}>
-          <PayButton to="alice@magicblock.id" amount="10 USDC" />
+          <PayButton to={MERCHANT} amount="10 USDC" />
           <button
             type="button"
             onClick={() => {
@@ -474,7 +443,7 @@ describe('wallet lifecycle', () => {
     render(<Harness />)
     expect(screen.getByRole('button', { name: /connect wallet/i })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'connect' }))
-    expect(screen.getByRole('button', { name: /pay 10 usdc/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /open session 10 usdc/i })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'disconnect' }))
     expect(screen.getByRole('button', { name: /connect wallet/i })).toBeTruthy()
   })

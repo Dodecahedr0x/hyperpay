@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Keep workspace package.json files, the Rust crate, and lockfiles on the
+ * Keep workspace package.json files, Rust crates, and lockfiles on the
  * version in the repo-root package.json.
  *
  *   node scripts/version.mjs check [tag]
@@ -38,13 +38,18 @@ function workspacePackageJsons() {
     .filter((path) => existsSync(path) && typeof readJson(path).version === 'string')
 }
 
-function cargoToml() {
-  return join(root, 'crates/hyperpay/Cargo.toml')
+function cargoTomls() {
+  return [
+    join(root, 'crates/hyperpay/Cargo.toml'),
+    join(root, 'programs/hyperpay/Cargo.toml'),
+  ].filter((path) => existsSync(path))
 }
 
 function cargoLock() {
-  return join(root, 'crates/hyperpay/Cargo.lock')
+  return join(root, 'Cargo.lock')
 }
+
+const cargoLockPackages = ['hyperpay', 'hyperpay-program']
 
 function packageLock() {
   return join(root, 'package-lock.json')
@@ -59,13 +64,15 @@ function setCargoPackageVersion(text, version) {
   return text.replace(/^version = "[^"]+"/m, `version = "${version}"`)
 }
 
-function cargoLockVersion(text) {
-  const match = /name = "hyperpay"\nversion = "([^"]+)"/.exec(text)
+function cargoLockPackageVersion(text, name) {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const match = new RegExp(`name = "${escaped}"\\nversion = "([^"]+)"`).exec(text)
   return match?.[1]
 }
 
-function setCargoLockVersion(text, version) {
-  return text.replace(/(name = "hyperpay"\n)version = "[^"]+"/, `$1version = "${version}"`)
+function setCargoLockPackageVersion(text, name, version) {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return text.replace(new RegExp(`(name = "${escaped}"\\n)version = "[^"]+"`), `$1version = "${version}"`)
 }
 
 function sites() {
@@ -73,11 +80,15 @@ function sites() {
   for (const path of workspacePackageJsons()) {
     found.push({ path, version: readJson(path).version })
   }
-  if (existsSync(cargoToml())) {
-    found.push({ path: cargoToml(), version: cargoPackageVersion(readFileSync(cargoToml(), 'utf8')) })
+  for (const path of cargoTomls()) {
+    found.push({ path, version: cargoPackageVersion(readFileSync(path, 'utf8')) })
   }
   if (existsSync(cargoLock())) {
-    found.push({ path: cargoLock(), version: cargoLockVersion(readFileSync(cargoLock(), 'utf8')) })
+    const text = readFileSync(cargoLock(), 'utf8')
+    for (const name of cargoLockPackages) {
+      const version = cargoLockPackageVersion(text, name)
+      if (version) found.push({ path: `${cargoLock()}#${name}`, version })
+    }
   }
   const lockPath = packageLock()
   if (existsSync(lockPath)) {
@@ -138,15 +149,18 @@ function align() {
     if (setReactPeer(pkg, version)) dirty = true
     if (dirty) writeJson(path, pkg)
   }
-  if (existsSync(cargoToml())) {
-    const text = readFileSync(cargoToml(), 'utf8')
+  for (const path of cargoTomls()) {
+    const text = readFileSync(path, 'utf8')
     const next = setCargoPackageVersion(text, version)
-    if (next !== text) writeFileSync(cargoToml(), next)
+    if (next !== text) writeFileSync(path, next)
   }
   if (existsSync(cargoLock())) {
-    const text = readFileSync(cargoLock(), 'utf8')
-    const next = setCargoLockVersion(text, version)
-    if (next !== text) writeFileSync(cargoLock(), next)
+    let text = readFileSync(cargoLock(), 'utf8')
+    const original = text
+    for (const name of cargoLockPackages) {
+      text = setCargoLockPackageVersion(text, name, version)
+    }
+    if (text !== original) writeFileSync(cargoLock(), text)
   }
   const lockPath = packageLock()
   if (existsSync(lockPath)) {

@@ -18,7 +18,7 @@ export function PaymentStatus({ status, payment, error, className, style }: Paym
   if (status === 'paying') {
     return (
       <p role="status" aria-live="polite" className={className} style={style}>
-        Sending payment…
+        Opening session…
       </p>
     )
   }
@@ -36,7 +36,7 @@ export function PaymentStatus({ status, payment, error, className, style }: Paym
   return (
     <div role="status" aria-live="polite" className={className} style={style}>
       <div>
-        Paid {payment.amount} to {payment.to}
+        Session {payment.amount} with {payment.to}
       </div>
       <div>{payment.signature}</div>
       {payment.explorerUrl ? (

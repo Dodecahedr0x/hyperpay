@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import type { Balances, PayOptions, Payment, Quote } from '@magicblock-labs/hyperpay-core/client'
+import type { Balances, Payment, Quote, SessionOptions } from '@magicblock-labs/hyperpay-core/client'
 import { useHyperPay } from './provider.js'
 
 export type PayStatus = 'idle' | 'quoting' | 'paying' | 'success' | 'error'
@@ -21,11 +21,11 @@ export function usePay() {
   }, [])
 
   const preview = useCallback(
-    async (to: string, amount: string | number | bigint, opts?: PayOptions) => {
+    async (merchant: string, amount: string | number | bigint, opts?: SessionOptions) => {
       setStatus('quoting')
       setError(undefined)
       try {
-        const next = await hp.quote(to, amount, opts)
+        const next = await hp.quote(merchant, amount, opts)
         setQuote(next)
         setStatus('idle')
         return next
@@ -39,12 +39,31 @@ export function usePay() {
     [hp],
   )
 
-  const pay = useCallback(
-    async (to: string, amount: string | number | bigint, opts?: PayOptions) => {
+  const openSession = useCallback(
+    async (merchant: string, amount: string | number | bigint, opts?: SessionOptions) => {
       setStatus('paying')
       setError(undefined)
       try {
-        const next = await hp.pay(to, amount, opts)
+        const next = await hp.openSession(merchant, amount, opts)
+        setPayment(next)
+        setStatus('success')
+        return next
+      } catch (cause) {
+        const err = cause instanceof Error ? cause : new Error(String(cause))
+        setError(err)
+        setStatus('error')
+        throw err
+      }
+    },
+    [hp],
+  )
+
+  const charge = useCallback(
+    async (user: string, amount: string | number | bigint) => {
+      setStatus('paying')
+      setError(undefined)
+      try {
+        const next = await hp.charge(user, amount)
         setPayment(next)
         setStatus('success')
         return next
@@ -59,7 +78,8 @@ export function usePay() {
   )
 
   return {
-    pay,
+    openSession,
+    charge,
     preview,
     payment,
     quote,
@@ -68,12 +88,6 @@ export function usePay() {
     reset,
     busy: status === 'quoting' || status === 'paying',
   }
-}
-
-/** True when private reads failed because the signer cannot authenticate (no `signMessage` / `login`). */
-function isPrivateReadUnavailable(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error)
-  return /cannot sign messages|signMessage|private balances are unavailable/i.test(message)
 }
 
 export function useBalance(opts: { token?: string; address?: string } = {}) {
@@ -88,15 +102,7 @@ export function useBalance(opts: { token?: string; address?: string } = {}) {
     try {
       setBalances(await hp.balance(opts))
     } catch (cause) {
-      // Private balance needs signer.signMessage (HyperPay.login()). Missing that
-      // capability is not a UI failure — surface base-only / omit private instead.
-      if (isPrivateReadUnavailable(cause) || !hp.signer?.signMessage) {
-        setBalances((prev) =>
-          prev ? { ...prev, private: undefined, privateUnits: undefined } : undefined,
-        )
-      } else {
-        setError(cause instanceof Error ? cause : new Error(String(cause)))
-      }
+      setError(cause instanceof Error ? cause : new Error(String(cause)))
     } finally {
       setLoading(false)
     }

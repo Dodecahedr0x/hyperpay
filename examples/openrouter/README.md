@@ -1,10 +1,10 @@
 # OpenRouter proxy
 
-End users **do not need an OpenRouter API key**. They need a HyperPay keypair with USDC (base layer is enough — `pay()` deposits onto the rollup if the ephemeral balance is short). This process holds `OPENROUTER_API_KEY` and forwards chat completions.
+End users **do not need an OpenRouter API key**. They need a HyperPay keypair and an open payment session with this merchant. This process holds `OPENROUTER_API_KEY` and forwards chat completions.
 
 When OpenRouter bills a generation, that USD cost is deducted from a **hold taken before the upstream call**. If credit cannot cover a worst-case generation (`max_tokens` × model price, plus a buffer), the server returns **402 and does not call OpenRouter**. Unused hold is released after the real `total_cost` lands; if the cost cannot be read, the hold is kept.
 
-The proxy cannot sign the user's key. The ER debit is the top-up (`hp.pay`).
+The proxy cannot sign the user's key. The user `openSession`s; the merchant may `charge` that session.
 
 ## E2E (no keys)
 
@@ -14,7 +14,7 @@ The example ships a mock OpenRouter and a throwaway merchant wallet. This is the
 npx vitest run examples/openrouter/e2e.test.ts
 ```
 
-To also send a real private `pay()` on devnet, pass a funded key (the mock still stands in for OpenRouter):
+To also send a real `openSession` on devnet, pass a funded key (the mock still stands in for OpenRouter):
 
 ```sh
 E2E_PAYER_KEY=~/.config/solana/id.json npx vitest run examples/openrouter/e2e.test.ts
@@ -33,7 +33,7 @@ export OPENROUTER_API_KEY=sk-or-...            # never given to users
 npx vite-node examples/openrouter/server.ts
 ```
 
-User (client) — keypair with USDC (base or rollup). No OpenRouter key:
+User (client) — keypair that can open a session. No OpenRouter key:
 
 ```sh
 export HYPERPAY_KEY=~/.hyperpay/agent.json
@@ -54,8 +54,8 @@ Default top-up is **1 USDC** (`TOPUP_AMOUNT`). Override the proxy with `OPENROUT
 ## What you should see
 
 1. `GET /quote` — merchant pubkey and USDC mint.
-2. Client `hp.pay(merchant, "1 USDC")` from the rollup → `POST /topup`.
-3. `POST /v1/chat/completions` with `x-account: <refId>`. If credit < worst-case hold → **402** (`needed`); OpenRouter is not called. The client tops up that amount and retries.
+2. Client `hp.openSession(merchant, "1 USDC")` → `POST /topup`.
+3. `POST /v1/chat/completions` with `x-account: <refId>`. If credit < worst-case hold → **402** (`needed`); OpenRouter is not called. The client opens more session remaining and retries.
 4. Server sets `max_tokens` (default 2048), forwards with its OpenRouter key.
 5. After a 200, server reads OpenRouter `total_cost`, captures that from the hold, and refunds the unused hold to the account.
 
@@ -63,5 +63,5 @@ Default top-up is **1 USDC** (`TOPUP_AMOUNT`). Override the proxy with `OPENROUT
 
 - Separate merchant and user `HYPERPAY_KEY`s.
 - Persist the credit ledger.
-- After a private top-up, poll `hp.balance()` until the merchant's private USDC rises.
-- The proxy still fronts OpenRouter's USD invoice; it cannot pull USDC from a user's rollup without their signature, so keep a prepaid float and debit it per generation.
+- After `openSession`, the merchant can `charge` remaining. Poll `hp.sessionBalance(user)` if you need remaining before releasing something costly.
+- The proxy still fronts OpenRouter's USD invoice; it cannot pull USDC from a user's eATA without their session, so keep a prepaid float and debit it per generation.

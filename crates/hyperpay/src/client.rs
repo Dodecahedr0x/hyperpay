@@ -1,53 +1,36 @@
-use solana_sdk::{signature::Keypair, signer::Signer};
+use solana_sdk::{
+    instruction::Instruction,
+    message::Message,
+    pubkey::Pubkey,
+    signature::Keypair,
+    signer::Signer,
+    transaction::{Transaction, VersionedTransaction},
+};
+use std::str::FromStr;
 
 use crate::amounts::{
     format_amount, from_base_units, lookup_known_token, parse_money, to_base_units, TokenInfo,
 };
-use crate::api::{
-    new_ref_id, ChargeRequest, DepositRequest, Fees, PaymentsApi, TransferRequest, WithdrawRequest,
+use crate::engine::{
+    base_rpc_for, ephemeral_rpc_for, get_account_data, get_latest_blockhash, sign_and_submit,
 };
-use crate::engine::{base_rpc_for, sign_and_submit};
 use crate::error::{HyperPayError, Result};
 use crate::policy::Policy;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Visibility {
-    Private,
-    Public,
-}
-
-impl Visibility {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Visibility::Private => "private",
-            Visibility::Public => "public",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct PayOptions {
-    /// Symbol or mint address. Overrides the symbol in the amount string.
-    pub token: Option<String>,
-    pub visibility: Option<Visibility>,
-    pub memo: Option<String>,
-    /// Fan a private transfer across 1-15 queue entries.
-    pub split: Option<u8>,
-}
+use crate::program::{
+    charge_ix, close_session_ix, deposit_ix, eata_pda, fund_user_ix, init_user_ix, open_session_ix,
+    remaining_from_session_data, session_pda, user_mint_pda, user_pda, withdraw_ix,
+    SessionAccounts, WithdrawAccounts,
+};
 
 #[derive(Debug, Clone)]
 pub struct Payment {
     pub signature: String,
-    pub ref_id: Option<String>,
     pub to: String,
-    /// Human form, e.g. `"10 USDC"`.
     pub amount: String,
     pub units: u64,
     pub token: TokenInfo,
-    pub visibility: Visibility,
     pub settled_on: String,
-    pub fees: Option<Fees>,
-    /// Absent for ephemeral settlement — private transfers are not publicly indexed.
+    /// Absent for ephemeral settlement.
     pub explorer_url: Option<String>,
 }
 
@@ -62,19 +45,20 @@ pub struct Balance {
 /// The whole payment system, in one struct.
 ///
 /// ```no_run
-/// # use hyperpay::{HyperPay, PayOptions};
+/// # use hyperpay::HyperPay;
 /// # async fn demo() -> hyperpay::Result<()> {
 /// let hp = HyperPay::from_env()?;
-/// let payment = hp.pay("alice@magicblock.id", "10 USDC", PayOptions::default()).await?;
+/// let payment = hp.charge("User11111111111111111111111111111111", "10 USDC").await?;
 /// println!("{}", payment.signature);
 /// # Ok(()) }
 /// ```
 pub struct HyperPay {
     pub cluster: String,
-    api: PaymentsApi,
     pub policy: Policy,
     keypair: Option<Keypair>,
     rpc_url: String,
+    ephemeral_rpc: String,
+    http: reqwest::Client,
     custom_tokens: Vec<TokenInfo>,
     default_token: String,
 }
@@ -83,17 +67,19 @@ impl HyperPay {
     pub fn new(keypair: Keypair, cluster: &str) -> Self {
         Self {
             cluster: cluster.to_string(),
-            api: PaymentsApi::default(),
             policy: Policy::new(),
             keypair: Some(keypair),
             rpc_url: base_rpc_for(cluster, None),
+            ephemeral_rpc: ephemeral_rpc_for(cluster, None),
+            http: reqwest::Client::new(),
             custom_tokens: Vec::new(),
             default_token: "USDC".to_string(),
         }
     }
 
     /// Reads `HYPERPAY_KEY` (a JSON byte array or a path to a keypair file),
-    /// `HYPERPAY_CLUSTER`, `HYPERPAY_RPC` and the policy variables.
+    /// `HYPERPAY_CLUSTER`, `HYPERPAY_RPC`, `HYPERPAY_EPHEMERAL_RPC` and the
+    /// policy variables.
     pub fn from_env() -> Result<Self> {
         let cluster = std::env::var("HYPERPAY_CLUSTER").unwrap_or_else(|_| "mainnet".into());
         let keypair = std::env::var("HYPERPAY_KEY")
@@ -103,13 +89,14 @@ impl HyperPay {
 
         Ok(Self {
             rpc_url: base_rpc_for(&cluster, std::env::var("HYPERPAY_RPC").ok().as_deref()),
-            api: match std::env::var("HYPERPAY_API") {
-                Ok(url) => PaymentsApi::new(&url),
-                Err(_) => PaymentsApi::default(),
-            },
+            ephemeral_rpc: ephemeral_rpc_for(
+                &cluster,
+                std::env::var("HYPERPAY_EPHEMERAL_RPC").ok().as_deref(),
+            ),
             policy: Policy::from_env()?,
             default_token: std::env::var("HYPERPAY_TOKEN").unwrap_or_else(|_| "USDC".into()),
             custom_tokens: Vec::new(),
+            http: reqwest::Client::new(),
             keypair,
             cluster,
         })
@@ -131,175 +118,164 @@ impl HyperPay {
         self
     }
 
+    pub fn with_rpc(mut self, url: &str) -> Self {
+        self.rpc_url = url.to_string();
+        self
+    }
+
+    pub fn with_ephemeral_rpc(mut self, url: &str) -> Self {
+        self.ephemeral_rpc = url.to_string();
+        self
+    }
+
     pub fn address(&self) -> Result<String> {
         Ok(self.signer()?.pubkey().to_string())
     }
 
-    /// Pay someone. Private by default.
-    pub async fn pay(&self, to: &str, amount: &str, opts: PayOptions) -> Result<Payment> {
-        let (token, units) = self.resolve_amount(amount, opts.token.as_deref())?;
-        let visibility = opts.visibility.unwrap_or(Visibility::Private);
-
-        // Runs before anything is built or signed: a rejected payment must
-        // leave no transaction in existence.
-        self.policy.check(to, &token, units)?;
-
-        let ref_id = matches!(visibility, Visibility::Private).then(new_ref_id);
-        let request = TransferRequest {
-            from: self.address()?,
-            to: to.to_string(),
-            mint: token.mint.clone(),
-            amount: units,
-            cluster: Some(self.cluster.clone()),
-            visibility: Some(visibility.as_str().to_string()),
-            memo: opts.memo,
-            client_ref_id: ref_id.clone(),
-            split: opts.split,
-            init_if_missing: Some(true),
-            init_atas_if_missing: Some(true),
-        };
-
-        let build = self.api.transfer(&request).await?;
-        let result =
-            sign_and_submit(&build, self.signer()?, &self.cluster, Some(&self.rpc_url)).await?;
-
-        Ok(Payment {
-            explorer_url: (result.settled_on == "base")
-                .then(|| self.explorer_url(&result.signature)),
-            signature: result.signature,
-            ref_id,
-            to: to.to_string(),
-            amount: format_amount(units, &token),
-            units,
-            token,
-            visibility,
-            settled_on: result.settled_on,
-            fees: build.fees,
-        })
+    /// Creates the User PDA on the base cluster and funds it with lamports.
+    pub async fn init_user(&self, lamports: u64) -> Result<Payment> {
+        let authority = self.signer()?.pubkey();
+        let (user, _) = user_pda(&authority);
+        let ix = init_user_ix(user, authority, lamports);
+        self.submit_base(ix, authority.to_string(), lamports, "lamports")
+            .await
     }
 
-    /// Moves tokens from the base layer into the ephemeral rollup.
-    pub async fn deposit(&self, amount: &str, token: Option<&str>) -> Result<Payment> {
+    /// Tops up the User PDA with lamports. Wallet or a user session token.
+    pub async fn fund_user(&self, lamports: u64, session_token: Option<&str>) -> Result<Payment> {
+        let signer = self.signer()?.pubkey();
+        let (user, _) = user_pda(&signer);
+        let ix = fund_user_ix(
+            user,
+            signer,
+            lamports,
+            parse_optional_pubkey(session_token)?,
+        );
+        self.submit_base(ix, signer.to_string(), lamports, "lamports")
+            .await
+    }
+
+    /// Opens a session with `merchant` and optionally deposits `amount`.
+    pub async fn open_session(
+        &self,
+        merchant: &str,
+        amount: &str,
+        token: Option<&str>,
+        session_token: Option<&str>,
+    ) -> Result<Payment> {
         let (token, units) = self.resolve_amount(amount, token)?;
-        let build = self
-            .api
-            .deposit(&DepositRequest {
-                owner: self.address()?,
-                mint: token.mint.clone(),
-                amount: units,
-                cluster: Some(self.cluster.clone()),
-                init_if_missing: true,
-                init_vault_if_missing: true,
-                init_atas_if_missing: true,
-            })
-            .await?;
-        self.receipt(build, token, units, Visibility::Private).await
-    }
-
-    /// Moves tokens from the ephemeral rollup back to the base layer.
-    pub async fn withdraw(&self, amount: &str, token: Option<&str>) -> Result<Payment> {
-        let (token, units) = self.resolve_amount(amount, token)?;
-        let build = self
-            .api
-            .withdraw(&WithdrawRequest {
-                owner: self.address()?,
-                mint: token.mint.clone(),
-                amount: units,
-                cluster: Some(self.cluster.clone()),
-                init_if_missing: true,
-                init_atas_if_missing: true,
-            })
-            .await?;
-        self.receipt(build, token, units, Visibility::Public).await
-    }
-
-    /// Registers a mint with the ephemeral validator. Required once per mint.
-    pub async fn initialize_mint(&self, token: Option<&str>) -> Result<Option<String>> {
-        let token = self.resolve_token(token.unwrap_or(&self.default_token))?;
-        if self
-            .api
-            .is_mint_initialized(&token.mint, &self.cluster)
-            .await?
-            .initialized
-        {
-            return Ok(None);
+        let merchant_pk = parse_pubkey(merchant)?;
+        if units > 0 {
+            self.policy.check(merchant, &token, units)?;
         }
-        let build = self
-            .api
-            .initialize_mint(&token.mint, &self.cluster, &self.address()?)
-            .await?;
-        let result =
-            sign_and_submit(&build, self.signer()?, &self.cluster, Some(&self.rpc_url)).await?;
-        Ok(Some(result.signature))
+        let accounts = self.session_accounts(self.signer()?.pubkey(), merchant_pk, &token)?;
+        let ix = open_session_ix(&accounts, units, parse_optional_pubkey(session_token)?);
+        self.submit_ephemeral(ix, merchant.to_string(), units, token)
+            .await
     }
 
-    pub async fn balance(&self, token: Option<&str>, address: Option<&str>) -> Result<Balance> {
+    /// Reserves more of the user eATA into an existing session.
+    pub async fn deposit(
+        &self,
+        merchant: &str,
+        amount: &str,
+        token: Option<&str>,
+        session_token: Option<&str>,
+    ) -> Result<Payment> {
+        let (token, units) = self.resolve_amount(amount, token)?;
+        self.policy.check(merchant, &token, units)?;
+        let merchant_pk = parse_pubkey(merchant)?;
+        let accounts = self.session_accounts(self.signer()?.pubkey(), merchant_pk, &token)?;
+        let ix = deposit_ix(&accounts, units, parse_optional_pubkey(session_token)?);
+        self.submit_ephemeral(ix, merchant.to_string(), units, token)
+            .await
+    }
+
+    /// Debit the user's ER session. Signs with the merchant key.
+    ///
+    /// The merchant must pass `None` for the session token — do not give a
+    /// user's session key to a merchant.
+    pub async fn charge(&self, user: &str, amount: &str) -> Result<Payment> {
+        let (token, units) = self.resolve_amount(amount, None)?;
+        let merchant = self.signer()?.pubkey();
+        self.policy.check(&merchant.to_string(), &token, units)?;
+        let user_wallet = parse_pubkey(user)?;
+        let accounts = self.session_accounts(user_wallet, merchant, &token)?;
+        let (merchant_eata, _) = eata_pda(&merchant, &accounts.mint);
+        let ix = charge_ix(&accounts, merchant_eata, units, None);
+        self.submit_ephemeral(ix, merchant.to_string(), units, token)
+            .await
+    }
+
+    /// Unreserves remaining and closes the session. User-only.
+    pub async fn close_session(
+        &self,
+        merchant: &str,
+        token: Option<&str>,
+        session_token: Option<&str>,
+    ) -> Result<Payment> {
         let token = self.resolve_token(token.unwrap_or(&self.default_token))?;
-        let address = match address {
-            Some(a) => a.to_string(),
-            None => self.address()?,
-        };
-        let response = self
-            .api
-            .balance(&address, &token.mint, &self.cluster)
-            .await?;
-        let units: u64 = response.balance.parse().unwrap_or(0);
-
-        Ok(Balance {
-            base: from_base_units(units, token.decimals),
-            base_units: units,
-            address,
-            token,
-        })
+        let merchant_pk = parse_pubkey(merchant)?;
+        let accounts = self.session_accounts(self.signer()?.pubkey(), merchant_pk, &token)?;
+        let ix = close_session_ix(&accounts, parse_optional_pubkey(session_token)?);
+        self.submit_ephemeral(ix, merchant.to_string(), 0, token)
+            .await
     }
 
-    /// Remaining USDC (or default token) on the ER session with this merchant.
+    /// Moves unreserved eATA tokens to `destination`'s eATA (defaults to the signer).
+    pub async fn withdraw(
+        &self,
+        amount: &str,
+        destination: Option<&str>,
+        token: Option<&str>,
+        session_token: Option<&str>,
+    ) -> Result<Payment> {
+        let (token, units) = self.resolve_amount(amount, token)?;
+        let signer = self.signer()?.pubkey();
+        let dest_owner = match destination {
+            Some(s) => parse_pubkey(s)?,
+            None => signer,
+        };
+        self.policy.check(&dest_owner.to_string(), &token, units)?;
+        let mint = parse_pubkey(&token.mint)?;
+        let (user, _) = user_pda(&signer);
+        let (user_mint, _) = user_mint_pda(&user, &mint);
+        let (user_eata, _) = eata_pda(&user, &mint);
+        let (dest_eata, _) = eata_pda(&dest_owner, &mint);
+        let ix = withdraw_ix(
+            &WithdrawAccounts {
+                user,
+                signer,
+                user_mint,
+                mint,
+                user_eata,
+                destination: dest_eata,
+            },
+            units,
+            parse_optional_pubkey(session_token)?,
+        );
+        self.submit_ephemeral(ix, dest_owner.to_string(), units, token)
+            .await
+    }
+
+    /// Remaining units on the ER session between `user` (wallet) and this merchant.
     pub async fn session_balance(&self, user: &str) -> Result<Balance> {
         let token = self.resolve_token(&self.default_token)?;
-        let merchant = self.address()?;
-        let response = self
-            .api
-            .session_balance(user, &merchant, &token.mint, &self.cluster)
-            .await?;
-        let units: u64 = response.balance.parse().unwrap_or(0);
+        let merchant = self.signer()?.pubkey();
+        let user_wallet = parse_pubkey(user)?;
+        let mint = parse_pubkey(&token.mint)?;
+        let (user_pda, _) = user_pda(&user_wallet);
+        let (session, _) = session_pda(&user_pda, &merchant, &mint);
+        let data = get_account_data(&self.http, &self.ephemeral_rpc, &session).await?;
+        let units = data
+            .as_deref()
+            .and_then(remaining_from_session_data)
+            .unwrap_or(0);
         Ok(Balance {
             base: from_base_units(units, token.decimals),
             base_units: units,
             address: user.to_string(),
             token,
-        })
-    }
-
-    /// Debit the user's ER session. Signs with the merchant key.
-    pub async fn charge(&self, user: &str, amount: &str) -> Result<Payment> {
-        let (token, units) = self.resolve_amount(amount, None)?;
-        let merchant = self.address()?;
-        self.policy.check(&merchant, &token, units)?;
-        let build = self
-            .api
-            .charge(&ChargeRequest {
-                user: user.to_string(),
-                merchant: merchant.clone(),
-                mint: token.mint.clone(),
-                amount: units,
-                cluster: Some(self.cluster.clone()),
-                visibility: Some(Visibility::Private.as_str().to_string()),
-            })
-            .await?;
-        let result =
-            sign_and_submit(&build, self.signer()?, &self.cluster, Some(&self.rpc_url)).await?;
-        Ok(Payment {
-            explorer_url: (result.settled_on == "base")
-                .then(|| self.explorer_url(&result.signature)),
-            signature: result.signature,
-            ref_id: None,
-            to: merchant,
-            amount: format_amount(units, &token),
-            units,
-            token,
-            visibility: Visibility::Private,
-            settled_on: result.settled_on,
-            fees: build.fees,
         })
     }
 
@@ -345,33 +321,105 @@ impl HyperPay {
         )))
     }
 
-    async fn receipt(
+    fn session_accounts(
         &self,
-        build: crate::api::BuildResponse,
-        token: TokenInfo,
+        wallet: Pubkey,
+        merchant: Pubkey,
+        token: &TokenInfo,
+    ) -> Result<SessionAccounts> {
+        let mint = parse_pubkey(&token.mint)?;
+        let (user, _) = user_pda(&wallet);
+        let (user_mint, _) = user_mint_pda(&user, &mint);
+        let (session, _) = session_pda(&user, &merchant, &mint);
+        let (user_eata, _) = eata_pda(&user, &mint);
+        Ok(SessionAccounts {
+            signer: self.signer()?.pubkey(),
+            user,
+            user_mint,
+            session,
+            merchant,
+            mint,
+            user_eata,
+        })
+    }
+
+    async fn submit_base(
+        &self,
+        ix: Instruction,
+        to: String,
         units: u64,
-        visibility: Visibility,
+        amount_label: &str,
     ) -> Result<Payment> {
-        let result =
-            sign_and_submit(&build, self.signer()?, &self.cluster, Some(&self.rpc_url)).await?;
+        self.submit(
+            ix,
+            &self.rpc_url,
+            "base",
+            Receipt {
+                to,
+                units,
+                token: TokenInfo::new("SOL", "So11111111111111111111111111111111111111112", 9),
+                amount: amount_label.to_string(),
+            },
+        )
+        .await
+    }
+
+    async fn submit_ephemeral(
+        &self,
+        ix: Instruction,
+        to: String,
+        units: u64,
+        token: TokenInfo,
+    ) -> Result<Payment> {
+        let amount = format_amount(units, &token);
+        self.submit(
+            ix,
+            &self.ephemeral_rpc,
+            "ephemeral",
+            Receipt {
+                to,
+                units,
+                token,
+                amount,
+            },
+        )
+        .await
+    }
+
+    async fn submit(
+        &self,
+        ix: Instruction,
+        rpc_url: &str,
+        settled_on: &str,
+        receipt: Receipt,
+    ) -> Result<Payment> {
+        let payer = self.signer()?.pubkey();
+        let blockhash = get_latest_blockhash(&self.http, rpc_url).await?;
+        let message = Message::new_with_blockhash(&[ix], Some(&payer), &blockhash);
+        let tx = VersionedTransaction::from(Transaction::new_unsigned(message));
+        let result = sign_and_submit(tx, self.signer()?, rpc_url, settled_on).await?;
         Ok(Payment {
             explorer_url: (result.settled_on == "base")
                 .then(|| self.explorer_url(&result.signature)),
             signature: result.signature,
-            ref_id: None,
-            to: self.address()?,
-            amount: format_amount(units, &token),
-            units,
-            token,
-            visibility,
+            to: receipt.to,
+            amount: receipt.amount,
+            units: receipt.units,
+            token: receipt.token,
             settled_on: result.settled_on,
-            fees: build.fees,
         })
     }
 
     fn signer(&self) -> Result<&Keypair> {
         self.keypair.as_ref().ok_or(HyperPayError::NoSigner)
     }
+}
+
+struct Receipt {
+    to: String,
+    units: u64,
+    token: TokenInfo,
+    amount: String,
 }
 
 /// Loads a keypair from a JSON byte array or a path to a Solana CLI keypair file.
@@ -391,72 +439,103 @@ pub fn load_keypair(source: &str) -> Result<Keypair> {
         .map_err(|e| HyperPayError::Resolution(format!("invalid keypair bytes: {e}")))
 }
 
+fn parse_pubkey(value: &str) -> Result<Pubkey> {
+    Pubkey::from_str(value)
+        .map_err(|_| HyperPayError::Resolution(format!("\"{value}\" is not a valid pubkey")))
+}
+
+fn parse_optional_pubkey(value: Option<&str>) -> Result<Option<Pubkey>> {
+    value.map(parse_pubkey).transpose()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-    use wiremock::matchers::{method, path, query_param};
+    use crate::program::SESSION_REMAINING_OFFSET;
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    use serde_json::json;
+    use wiremock::matchers::{body_partial_json, method};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    const DEVNET_USDC: &str = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
-    const USER: &str = "User11111111111111111111111111111111";
-
-    fn restore_var(key: &str, previous: Option<String>) {
-        match previous {
-            Some(value) => std::env::set_var(key, value),
-            None => std::env::remove_var(key),
-        }
-    }
-
     #[tokio::test]
-    async fn session_balance_reads_units() {
-        let _guard = ENV_LOCK.lock().unwrap();
+    async fn session_balance_reads_remaining_from_session_pda() {
+        let keypair = Keypair::new();
+        let user = Keypair::new().pubkey();
+        let mint = Pubkey::from_str("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU").unwrap();
+        let (user_account, _) = user_pda(&user);
+        let (session, _) = session_pda(&user_account, &keypair.pubkey(), &mint);
+
+        let mut data = vec![0u8; 113];
+        data[SESSION_REMAINING_OFFSET..SESSION_REMAINING_OFFSET + 8]
+            .copy_from_slice(&42_000u64.to_le_bytes());
 
         let server = MockServer::start().await;
-        let keypair = Keypair::new();
-        let merchant = keypair.pubkey().to_string();
-        let key_json = serde_json::to_string(&keypair.to_bytes().to_vec()).unwrap();
-
-        Mock::given(method("GET"))
-            .and(path("/v1/spl/session-balance"))
-            .and(query_param("user", USER))
-            .and(query_param("merchant", &merchant))
-            .and(query_param("mint", DEVNET_USDC))
-            .and(query_param("cluster", "devnet"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "user": USER,
-                "merchant": merchant,
-                "mint": DEVNET_USDC,
-                "balance": "42000"
+        Mock::given(method("POST"))
+            .and(body_partial_json(json!({
+                "method": "getAccountInfo",
+                "params": [session.to_string(), { "encoding": "base64" }]
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": { "value": { "data": [STANDARD.encode(data), "base64"] } }
             })))
             .expect(1)
             .mount(&server)
             .await;
 
-        let prev_key = std::env::var("HYPERPAY_KEY").ok();
-        let prev_cluster = std::env::var("HYPERPAY_CLUSTER").ok();
-        let prev_api = std::env::var("HYPERPAY_API").ok();
-        let prev_token = std::env::var("HYPERPAY_TOKEN").ok();
-        std::env::set_var("HYPERPAY_KEY", &key_json);
-        std::env::set_var("HYPERPAY_CLUSTER", "devnet");
-        std::env::set_var("HYPERPAY_API", server.uri());
-        std::env::remove_var("HYPERPAY_TOKEN");
-
-        let result = async {
-            let hp = HyperPay::from_env()?;
-            hp.session_balance(USER).await
-        }
-        .await;
-
-        restore_var("HYPERPAY_KEY", prev_key);
-        restore_var("HYPERPAY_CLUSTER", prev_cluster);
-        restore_var("HYPERPAY_API", prev_api);
-        restore_var("HYPERPAY_TOKEN", prev_token);
-
-        let b = result.unwrap();
+        let hp = HyperPay::new(keypair, "devnet").with_ephemeral_rpc(&server.uri());
+        let b = hp.session_balance(&user.to_string()).await.unwrap();
         assert_eq!(b.base_units, 42_000);
-        assert_eq!(b.address, USER);
+        assert_eq!(b.address, user.to_string());
+    }
+
+    #[tokio::test]
+    async fn charge_is_blocked_by_policy_before_sign() {
+        let keypair = Keypair::new();
+        let user = Keypair::new().pubkey();
+        let policy = Policy::new().max_per_tx("1 USDC").unwrap();
+        let hp = HyperPay::new(keypair, "devnet").with_policy(policy);
+
+        let err = hp.charge(&user.to_string(), "2 USDC").await.unwrap_err();
+        match err {
+            HyperPayError::Policy(message) => {
+                assert!(
+                    message.contains("exceeds the per-transaction cap"),
+                    "{message}"
+                );
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+    }
+
+    #[test]
+    fn charge_ix_never_forwards_a_session_token() {
+        let merchant = Keypair::new().pubkey();
+        let user_wallet = Keypair::new().pubkey();
+        let mint = Pubkey::new_unique();
+        let (user, _) = user_pda(&user_wallet);
+        let (user_mint, _) = user_mint_pda(&user, &mint);
+        let (session, _) = session_pda(&user, &merchant, &mint);
+        let (user_eata, _) = eata_pda(&user, &mint);
+        let (merchant_eata, _) = eata_pda(&merchant, &mint);
+        let ix = charge_ix(
+            &SessionAccounts {
+                user,
+                signer: merchant,
+                user_mint,
+                session,
+                merchant,
+                mint,
+                user_eata,
+            },
+            merchant_eata,
+            10,
+            None,
+        );
+        assert_eq!(
+            ix.accounts.last().unwrap().pubkey,
+            crate::program::PROGRAM_ID
+        );
     }
 }

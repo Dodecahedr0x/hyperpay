@@ -1,14 +1,15 @@
 'use client'
 
 import type { CSSProperties, ReactNode } from 'react'
-import type { PayOptions, Payment } from '@magicblock-labs/hyperpay-core/client'
+import type { Payment, SessionOptions } from '@magicblock-labs/hyperpay-core/client'
 import { usePay } from '../hooks.js'
 import { useHyperPay } from '../provider.js'
 
 export interface PayButtonProps {
+  /** Merchant pubkey. Opens a session with this merchant. */
   to: string
   amount: string | number | bigint
-  options?: PayOptions
+  options?: SessionOptions
   children?: ReactNode
   disabled?: boolean
   className?: string
@@ -29,7 +30,7 @@ export function PayButton({
   onError,
 }: PayButtonProps) {
   const hp = useHyperPay()
-  const { pay, busy } = usePay()
+  const { openSession, busy } = usePay()
   const disconnected = !hp.signer
   const label = typeof amount === 'string' ? amount : String(amount)
 
@@ -41,10 +42,10 @@ export function PayButton({
       disabled={disabled || busy || disconnected}
       onClick={() => {
         if (disconnected) return
-        void pay(to, amount, options).then(onSettled, onError)
+        void openSession(to, amount, options).then(onSettled, onError)
       }}
     >
-      {disconnected ? 'Connect wallet' : (children ?? (busy ? 'Paying…' : `Pay ${label}`))}
+      {disconnected ? 'Connect wallet' : (children ?? (busy ? 'Opening…' : `Open session ${label}`))}
     </button>
   )
 }

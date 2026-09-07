@@ -1,8 +1,8 @@
 # React checkout
 
-Connect a wallet, then pay with `PayButton`. Uses `@magicblock-labs/hyperpay-react`.
+Connect a wallet, then open a payment session with `PayButton`. Uses `@magicblock-labs/hyperpay-react`.
 
-`fromEnv()` and `{ key }` are Node-only. This app passes `{ wallet }`.
+`fromEnv()` and `{ key }` are Node-only. This app passes `wallet` to `HyperPayProvider`.
 
 ```sh
 # from repo root
@@ -10,6 +10,6 @@ npm install
 npm run dev -w hyperpay-example-react
 ```
 
-Open the URL Vite prints. Click **Connect wallet**, then **Pay 10 USDC**.
+Open the URL Vite prints. Click **Connect wallet**, then **Open session 10 USDC**.
 
 Swap `useDemoWallet` in `src/main.tsx` for `useWallet()` from `@solana/wallet-adapter-react` — same shape. A real adapter must `signTransaction`; the demo one does not.

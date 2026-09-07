@@ -3,6 +3,7 @@ import { createServer, type Server } from 'node:http'
 import { AddressInfo } from 'node:net'
 import { Keypair } from '@solana/web3.js'
 import { HyperPay, loadKeypair } from '@magicblock-labs/hyperpay-core'
+import { keypairSigner } from '@magicblock-labs/hyperpay-solana'
 import { Paywall, payingFetch, challengeBody, PAYMENT_HEADER } from '@magicblock-labs/hyperpay-x402'
 
 /**
@@ -22,7 +23,8 @@ describe.skipIf(!configured)('x402 agent payment loop', () => {
 
   beforeAll(async () => {
     // The merchant is a fresh wallet, so any credit we observe came from this test.
-    merchant = Keypair.generate().publicKey.toBase58()
+    const merchantKey = Keypair.generate()
+    merchant = merchantKey.publicKey.toBase58()
 
     const token = { mint: E2E_MINT!, symbol: 'TEST', decimals: 6 }
     agent = new HyperPay({
@@ -33,7 +35,12 @@ describe.skipIf(!configured)('x402 agent payment loop', () => {
       policy: { maxPerTx: '5 TEST' },
     })
 
-    const merchantHp = new HyperPay({ cluster: 'devnet', tokens: [token], defaultToken: 'TEST' })
+    const merchantHp = new HyperPay({
+      cluster: 'devnet',
+      tokens: [token],
+      defaultToken: 'TEST',
+      signer: keypairSigner(merchantKey),
+    })
     const paywall = new Paywall({
       hp: merchantHp,
       price: '0.5 TEST',
@@ -73,7 +80,8 @@ describe.skipIf(!configured)('x402 agent payment loop', () => {
   })
 
   it('lets an agent pay publicly and proves settlement from the chain', async () => {
-    const res = await payingFetch({ hp: agent, visibility: 'public', maxPrice: '1 TEST' })(url)
+    await agent.openSession(merchant, '0.5')
+    const res = await payingFetch({ hp: agent, maxPrice: '1 TEST' })(url)
 
     expect(res.status).toBe(200)
     const body = (await res.json()) as { data: string; strength: string }
@@ -86,7 +94,7 @@ describe.skipIf(!configured)('x402 agent payment loop', () => {
   }, 180_000)
 
   it('rejects a replayed payment proof', async () => {
-    const paid = await payingFetch({ hp: agent, visibility: 'public' })(url)
+    const paid = await payingFetch({ hp: agent })(url)
     expect(paid.status).toBe(200)
 
     // Re-use the exact proof the agent just sent. The challenge is single-use.
@@ -94,8 +102,7 @@ describe.skipIf(!configured)('x402 agent payment loop', () => {
     const stale = Buffer.from(
       JSON.stringify({
         refId: requirement.accepts[0]!.refId,
-        signature: '4'.repeat(88),
-        from: loadKeypair(E2E_PAYER_KEY!).publicKey.toBase58(),
+        user: loadKeypair(E2E_PAYER_KEY!).publicKey.toBase58(),
         network: 'devnet',
       }),
     ).toString('base64')

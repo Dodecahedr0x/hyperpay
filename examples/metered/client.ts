@@ -60,15 +60,14 @@ const q = (await api('GET', `/quote?units=${units}`)) as {
 const hp = HyperPay.fromEnv()
 const refId = loadRef() ?? newRefId()
 
-console.log(`paying ${q.amount} to ${q.merchant} (private, ${q.pricePerUnit} × ${units})`)
+console.log(`open session ${q.amount} with ${q.merchant} (${q.pricePerUnit} × ${units})`)
 console.log(`from   ${hp.signer?.publicKey.toBase58()}`)
 if (hp.signer?.publicKey.toBase58() === q.merchant) {
   console.log('(demo: payer and merchant share a wallet — use two keys in production)')
 }
 
-const payment = await hp.pay(q.merchant, q.amount, { refId })
-console.log(`paid   ${payment.amount}  ref ${payment.refId}  sig ${payment.signature}`)
-console.log(`        private — not on the public explorer`)
+const payment = await hp.openSession(q.merchant, q.amount)
+console.log(`opened ${payment.amount}  sig ${payment.signature}`)
 
 const topup = await api('POST', '/topup', { signature: payment.signature, refId, units })
 saveRef(refId)

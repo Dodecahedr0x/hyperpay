@@ -68,9 +68,9 @@ async function ensureCredit(id: string, merchant: string, atLeast?: string) {
   if (atLeast && remaining >= need) return
 
   const amount = atLeast && need > (await hp.resolveAmount(TOPUP)).units ? atLeast : TOPUP
-  console.log(`top up ${amount} → ${merchant} (private)`)
-  const payment = await hp.pay(merchant, amount, { refId: id })
-  console.log(`paid ${payment.amount}  sig ${payment.signature}`)
+  console.log(`open session ${amount} → ${merchant}`)
+  const payment = await hp.openSession(merchant, amount)
+  console.log(`opened ${payment.amount}  sig ${payment.signature}`)
   await api('POST', '/topup', { signature: payment.signature, refId: id, amount: payment.amount })
 }
 

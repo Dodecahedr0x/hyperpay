@@ -23,8 +23,7 @@ export function HyperPayProvider({
   tokens,
   cluster,
   rpcUrl,
-  apiUrl,
-  authToken,
+  ephemeralRpcUrl,
   defaultToken,
 }: HyperPayProviderProps) {
   const fromWallet = useWalletSigner(wallet)
@@ -40,11 +39,10 @@ export function HyperPayProvider({
         tokens,
         cluster,
         rpcUrl,
-        apiUrl,
-        authToken,
+        ephemeralRpcUrl,
         defaultToken,
       }),
-    [client, resolvedSigner, policy, tokens, cluster, rpcUrl, apiUrl, authToken, defaultToken],
+    [client, resolvedSigner, policy, tokens, cluster, rpcUrl, ephemeralRpcUrl, defaultToken],
   )
   return <HyperPayContext.Provider value={value}>{children}</HyperPayContext.Provider>
 }

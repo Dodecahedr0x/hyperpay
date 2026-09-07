@@ -2,7 +2,7 @@
 
 Drop HyperPay into an existing React app. Install this package separately; the umbrella does not depend on it.
 
-`fromEnv()` and `{ key }` are Node-only. Pass `{ wallet }` (same shape as `useWallet()`) or `{ signer }`.
+`fromEnv()` and `{ key }` are Node-only. Pass `wallet` (same shape as `useWallet()`) or `signer` to `HyperPayProvider`.
 
 ```tsx
 import { useWallet } from '@solana/wallet-adapter-react'
@@ -12,7 +12,7 @@ function Checkout() {
   const wallet = useWallet()
   return (
     <HyperPayProvider cluster="devnet" wallet={wallet}>
-      <PayButton to="alice@magicblock.id" amount="10 USDC" />
+      <PayButton to={merchant} amount="10 USDC" />
     </HyperPayProvider>
   )
 }

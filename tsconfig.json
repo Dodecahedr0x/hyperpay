@@ -12,7 +12,7 @@
       "@magicblock-labs/hyperpay/react": ["./packages/hyperpay/src/react.ts"],
       "@magicblock-labs/hyperpay/mcp": ["./packages/hyperpay/src/mcp.ts"],
       "@magicblock-labs/hyperpay-core": ["./packages/core/src/index.ts"],
-      "@magicblock-labs/hyperpay-core/api": ["./packages/core/src/api.ts"],
+      "@magicblock-labs/hyperpay-core/program": ["./packages/core/src/program.ts"],
       "@magicblock-labs/hyperpay-core/client": ["./packages/core/src/client.ts"],
       "@magicblock-labs/hyperpay-core/policy": ["./packages/core/src/policy.ts"],
       "@magicblock-labs/hyperpay-core/signer": ["./packages/core/src/signer-node.ts"],

@@ -1,5 +1,10 @@
 # HyperPay — design
 
+> **Superseded (2026-09-07).** This document describes the hosted Payments API
+> client (`pay()`, stealth handles, `visibility`). HyperPay is now a payment-session
+> program plus a client that builds `initUser` / `openSession` / `charge`. See
+> [`2026-09-07-payment-sessions-design.md`](2026-09-07-payment-sessions-design.md).
+
 **Date:** 2026-08-11
 **Goal:** the easiest payment system on Solana, built on private ephemeral rollups and eSPL. Agent-ready, one-line integration.
 

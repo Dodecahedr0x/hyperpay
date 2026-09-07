@@ -46,7 +46,6 @@ describe('openrouter proxy e2e', () => {
     const quote = await api('GET', '/quote')
     expect(quote.merchant).toBe(merchantKey.publicKey.toBase58())
     expect(quote.token).toBe('USDC')
-    expect(quote.visibility).toBe('private')
   })
 
   it('returns 503 when OPENROUTER_API_KEY is missing', async () => {
@@ -131,7 +130,7 @@ describe.skipIf(!process.env.E2E_PAYER_KEY)('live HyperPay top-up', () => {
     const hp = new HyperPay({ key: process.env.E2E_PAYER_KEY, cluster: 'devnet' })
     const quote = (await api('GET', '/quote')) as { merchant: string }
     const refId = String(Date.now())
-    const payment = await hp.pay(quote.merchant, '0.01 USDC', { refId })
+    const payment = await hp.openSession(quote.merchant, '0.01 USDC')
     await api('POST', '/topup', { signature: payment.signature, refId, amount: payment.amount })
 
     const res = await chat(refId, { model: MODEL, max_tokens: 16, messages: [{ role: 'user', content: 'hi' }] })
