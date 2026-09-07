@@ -1,136 +1,146 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { PublicKey } from '@solana/web3.js'
-import { HyperPay, PaymentsApi } from '@magicblock-labs/hyperpay-core'
+import { createHash } from 'node:crypto'
+import { afterEach, describe, expect, it } from 'vitest'
+import { Keypair, PublicKey } from '@solana/web3.js'
+import {
+  HyperPay,
+  PROGRAM_ID,
+  SESSION_REMAINING_OFFSET,
+  chargeIx,
+  openSessionIx,
+  sessionPda,
+  userMintPda,
+  userPda,
+} from '@magicblock-labs/hyperpay-core'
 import { PolicyError } from '@magicblock-labs/hyperpay-types'
-import type { ChargeRequest, SessionBalanceResponse } from '@magicblock-labs/hyperpay-types'
 import type { HyperPaySigner } from '@magicblock-labs/hyperpay-solana'
 
-const USER = 'User11111111111111111111111111111111'
-const MERCHANT = '9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM'
-const DEVNET_USDC = '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU'
-const API = 'https://payments.test'
+const USER_WALLET = new PublicKey('8fRp9fpqfXEMp2WGdsZa6rAuBvc1YayprRp6ZzMDLhHR')
+const MERCHANT = new PublicKey('9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM')
+const DEVNET_USDC = new PublicKey('4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU')
+const SESSION_KEY = new PublicKey('97RmZAHQXThHyEn9BtFmAGtbVTRF4TBXKp4uv6rYoDkt')
 
-function jsonOk(body: unknown): Response {
-  return new Response(JSON.stringify(body), {
-    status: 200,
-    headers: { 'content-type': 'application/json' },
-  })
+function sighash(name: string): Uint8Array {
+  return createHash('sha256').update(`global:${name}`).digest().subarray(0, 8)
 }
 
 function merchantSigner(): HyperPaySigner {
   return {
-    publicKey: new PublicKey(MERCHANT),
+    publicKey: MERCHANT,
     signTransaction: async (tx) => tx,
   }
 }
 
-describe('PaymentsApi.sessionBalance', () => {
-  it('GETs user merchant mint cluster and parses the remaining units string', async () => {
-    const fetch = vi.fn(async (input: RequestInfo | URL) => {
-      const url = new URL(String(input))
-      expect(url.origin + url.pathname).toBe(`${API}/v1/spl/session-balance`)
-      expect(url.searchParams.get('user')).toBe(USER)
-      expect(url.searchParams.get('merchant')).toBe(MERCHANT)
-      expect(url.searchParams.get('mint')).toBe(DEVNET_USDC)
-      expect(url.searchParams.get('cluster')).toBe('devnet')
-      const body: SessionBalanceResponse = {
-        user: USER,
-        merchant: MERCHANT,
-        mint: DEVNET_USDC,
-        balance: '5000',
-      }
-      return jsonOk(body)
-    })
+describe('program PDAs', () => {
+  it('userPda matches [user, wallet] on the hyperpay program', () => {
+    const [pda, bump] = userPda(USER_WALLET)
+    const [expected, expectedBump] = PublicKey.findProgramAddressSync(
+      [Buffer.from('user'), USER_WALLET.toBuffer()],
+      PROGRAM_ID,
+    )
+    expect(pda.equals(expected)).toBe(true)
+    expect(bump).toBe(expectedBump)
+    expect(PROGRAM_ID.toBase58()).toBe('Adyo1eYuP8deoLxwgkvaomUYvAUKUGryh4RGpdTR9YhU')
+  })
 
-    const api = new PaymentsApi({ baseUrl: API, fetch: fetch as typeof globalThis.fetch })
-    const res = await api.sessionBalance(USER, MERCHANT, DEVNET_USDC, 'devnet')
+  it('sessionPda matches [session, user, merchant, mint]', () => {
+    const [user] = userPda(USER_WALLET)
+    const [pda, bump] = sessionPda(user, MERCHANT, DEVNET_USDC)
+    const [expected, expectedBump] = PublicKey.findProgramAddressSync(
+      [Buffer.from('session'), user.toBuffer(), MERCHANT.toBuffer(), DEVNET_USDC.toBuffer()],
+      PROGRAM_ID,
+    )
+    expect(pda.equals(expected)).toBe(true)
+    expect(bump).toBe(expectedBump)
+  })
 
-    expect(res.balance).toBe('5000')
-    expect(res.user).toBe(USER)
-    expect(res.merchant).toBe(MERCHANT)
-    expect(res.mint).toBe(DEVNET_USDC)
-    expect(fetch).toHaveBeenCalledTimes(1)
+  it('userMintPda matches [user_mint, user, mint]', () => {
+    const [user] = userPda(USER_WALLET)
+    const [pda, bump] = userMintPda(user, DEVNET_USDC)
+    const [expected, expectedBump] = PublicKey.findProgramAddressSync(
+      [Buffer.from('user_mint'), user.toBuffer(), DEVNET_USDC.toBuffer()],
+      PROGRAM_ID,
+    )
+    expect(pda.equals(expected)).toBe(true)
+    expect(bump).toBe(expectedBump)
   })
 })
 
-describe('PaymentsApi.charge', () => {
-  it('POSTs a camelCase debit request and returns the build', async () => {
-    const req: ChargeRequest = {
-      user: USER,
+describe('HyperPay public surface', () => {
+  it('has no PaymentsApi and no pay', async () => {
+    const core = await import('@magicblock-labs/hyperpay-core')
+    expect(core).not.toHaveProperty('PaymentsApi')
+    expect(core).not.toHaveProperty('DEFAULT_API_URL')
+    expect(HyperPay.prototype).not.toHaveProperty('pay')
+    const hp = new HyperPay({ cluster: 'devnet', signer: merchantSigner() })
+    expect(hp).not.toHaveProperty('api')
+    expect((hp as { pay?: unknown }).pay).toBeUndefined()
+  })
+})
+
+describe('instruction builders', () => {
+  it('chargeIx omits the session token by passing the program id', () => {
+    const [user] = userPda(USER_WALLET)
+    const [userMint] = userMintPda(user, DEVNET_USDC)
+    const [session] = sessionPda(user, MERCHANT, DEVNET_USDC)
+    const ix = chargeIx(
+      {
+        user,
+        signer: MERCHANT,
+        userMint,
+        session,
+        merchant: MERCHANT,
+        mint: DEVNET_USDC,
+        userEata: Keypair.generate().publicKey,
+      },
+      Keypair.generate().publicKey,
+      20n,
+    )
+    expect(ix.programId.equals(PROGRAM_ID)).toBe(true)
+    expect(Buffer.from(ix.data.subarray(0, 8))).toEqual(Buffer.from(sighash('charge')))
+    const amount = Buffer.alloc(8)
+    amount.writeBigUInt64LE(20n)
+    expect(Buffer.from(ix.data.subarray(8))).toEqual(amount)
+    const token = ix.keys.at(-1)!
+    expect(token.pubkey.equals(PROGRAM_ID)).toBe(true)
+    expect(token.isSigner).toBe(false)
+    expect(ix.keys[1]!.pubkey.equals(MERCHANT)).toBe(true)
+    expect(ix.keys[1]!.isSigner).toBe(true)
+  })
+
+  it('openSessionIx allows amount 0', () => {
+    const [user] = userPda(USER_WALLET)
+    const ix = openSessionIx(
+      {
+        user,
+        signer: USER_WALLET,
+        userMint: Keypair.generate().publicKey,
+        session: Keypair.generate().publicKey,
+        merchant: MERCHANT,
+        mint: DEVNET_USDC,
+        userEata: Keypair.generate().publicKey,
+      },
+      0n,
+    )
+    expect(Buffer.from(ix.data.subarray(0, 8))).toEqual(Buffer.from(sighash('open_session')))
+    expect(Buffer.from(ix.data.subarray(8))).toEqual(Buffer.from(new Uint8Array(8)))
+  })
+
+  it('does not derive userPda from a session-key signer', () => {
+    const [fromWallet] = userPda(USER_WALLET)
+    const [fromSessionKey] = userPda(SESSION_KEY)
+    expect(fromWallet.equals(fromSessionKey)).toBe(false)
+    const hp = new HyperPay({
+      cluster: 'devnet',
+      signer: { publicKey: SESSION_KEY, signTransaction: async (tx) => tx },
+    })
+    const accounts = hp.sessionAccounts({
+      authority: USER_WALLET,
       merchant: MERCHANT,
       mint: DEVNET_USDC,
-      amount: 10_000,
-      cluster: 'devnet',
-      visibility: 'private',
-    }
-
-    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      expect(String(input)).toBe(`${API}/v1/spl/charge`)
-      expect(init?.method).toBe('POST')
-      expect(JSON.parse(String(init?.body))).toEqual({
-        user: USER,
-        merchant: MERCHANT,
-        mint: DEVNET_USDC,
-        amount: 10_000,
-        cluster: 'devnet',
-        visibility: 'private',
-      })
-      return jsonOk({
-        kind: 'transfer',
-        version: 'legacy',
-        transactionBase64: 'dGVzdA==',
-        sendTo: 'ephemeral',
-        recentBlockhash: '11111111111111111111111111111111',
-        lastValidBlockHeight: 1,
-        instructionCount: 1,
-        requiredSigners: [],
-      })
     })
-
-    const api = new PaymentsApi({ baseUrl: API, fetch: fetch as typeof globalThis.fetch })
-    const res = await api.charge(req)
-
-    expect(res.transactionBase64).toBe('dGVzdA==')
-    expect(res.sendTo).toBe('ephemeral')
-    expect(fetch).toHaveBeenCalledTimes(1)
-  })
-})
-
-describe('HyperPay.sessionBalance', () => {
-  const originalFetch = globalThis.fetch
-  afterEach(() => {
-    globalThis.fetch = originalFetch
-  })
-
-  it('reads remaining units for the user against this merchant and the default mint', async () => {
-    const fetch = vi.fn(async (input: RequestInfo | URL) => {
-      const url = new URL(String(input))
-      expect(url.pathname).toBe('/v1/spl/session-balance')
-      expect(url.searchParams.get('user')).toBe(USER)
-      expect(url.searchParams.get('merchant')).toBe(MERCHANT)
-      expect(url.searchParams.get('mint')).toBe(DEVNET_USDC)
-      expect(url.searchParams.get('cluster')).toBe('devnet')
-      return jsonOk({
-        user: USER,
-        merchant: MERCHANT,
-        mint: DEVNET_USDC,
-        balance: '42000',
-      })
-    })
-    globalThis.fetch = fetch as typeof globalThis.fetch
-
-    const hp = new HyperPay({
-      signer: merchantSigner(),
-      cluster: 'devnet',
-      apiUrl: API,
-    })
-    const bal = await hp.sessionBalance(USER)
-
-    expect(bal.address).toBe(USER)
-    expect(bal.baseUnits).toBe('42000')
-    expect(bal.base).toBe('0.042')
-    expect(bal.token.mint).toBe(DEVNET_USDC)
-    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(accounts.user.equals(fromWallet)).toBe(true)
+    expect(accounts.user.equals(fromSessionKey)).toBe(false)
+    expect(accounts.signer.equals(SESSION_KEY)).toBe(true)
   })
 })
 
@@ -140,57 +150,73 @@ describe('HyperPay.charge', () => {
     globalThis.fetch = originalFetch
   })
 
-  it('checks policy against the merchant before it posts a charge', async () => {
-    const fetch = vi.fn()
+  it('checks policy against the merchant before it signs', async () => {
+    const fetch = async () => {
+      throw new Error('policy must run before any RPC')
+    }
     globalThis.fetch = fetch as typeof globalThis.fetch
 
     const hp = new HyperPay({
       signer: merchantSigner(),
       cluster: 'devnet',
-      apiUrl: API,
-      policy: { deny: [MERCHANT] },
+      policy: { deny: [MERCHANT.toBase58()] },
     })
 
-    await expect(hp.charge(USER, '0.01 USDC')).rejects.toBeInstanceOf(PolicyError)
-    expect(fetch).not.toHaveBeenCalled()
+    await expect(hp.charge(USER_WALLET.toBase58(), '0.01 USDC')).rejects.toBeInstanceOf(PolicyError)
+  })
+})
+
+describe('HyperPay.sessionBalance', () => {
+  const originalFetch = globalThis.fetch
+  afterEach(() => {
+    globalThis.fetch = originalFetch
   })
 
-  it('posts a private charge for this merchant and does not submit a chain transaction', async () => {
-    const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
-      jsonOk({
-        kind: 'transfer',
-        version: 'legacy',
-        transactionBase64: 'not-a-real-transaction',
-        sendTo: 'ephemeral',
-        recentBlockhash: '11111111111111111111111111111111',
-        lastValidBlockHeight: 1,
-        instructionCount: 1,
-        requiredSigners: [],
-      }),
-    )
-    globalThis.fetch = fetch as typeof globalThis.fetch
+  it('reads remaining units from the session PDA on the ephemeral RPC', async () => {
+    const [user] = userPda(USER_WALLET)
+    const [session] = sessionPda(user, MERCHANT, DEVNET_USDC)
+    const data = Buffer.alloc(SESSION_REMAINING_OFFSET + 8)
+    data.writeBigUInt64LE(42_000n, SESSION_REMAINING_OFFSET)
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as {
+        method: string
+        params: [string, { encoding: string }]
+      }
+      expect(String(input)).toBe('https://ephemeral.test')
+      expect(body.method).toBe('getAccountInfo')
+      expect(body.params[0]).toBe(session.toBase58())
+      expect(body.params[1]).toEqual({ encoding: 'base64' })
+      return Response.json({
+        jsonrpc: '2.0',
+        id: 1,
+        result: { value: { data: [data.toString('base64'), 'base64'] } },
+      })
+    }) as typeof globalThis.fetch
 
     const hp = new HyperPay({
       signer: merchantSigner(),
       cluster: 'devnet',
-      apiUrl: API,
+      ephemeralRpcUrl: 'https://ephemeral.test',
     })
+    const bal = await hp.sessionBalance(USER_WALLET.toBase58())
 
-    await expect(hp.charge(USER, '0.01 USDC')).rejects.toThrow(
-      /invalid|decode|transaction|buffer/i,
-    )
+    expect(bal.address).toBe(USER_WALLET.toBase58())
+    expect(bal.baseUnits).toBe('42000')
+    expect(bal.base).toBe('0.042')
+    expect(bal.token.mint).toBe(DEVNET_USDC.toBase58())
+  })
+})
 
-    expect(fetch).toHaveBeenCalledTimes(1)
-    const [url, init] = fetch.mock.calls[0]!
-    expect(String(url)).toBe(`${API}/v1/spl/charge`)
-    expect(init?.method).toBe('POST')
-    expect(JSON.parse(String(init?.body))).toEqual({
-      user: USER,
-      merchant: MERCHANT,
-      mint: DEVNET_USDC,
-      amount: 10_000,
+describe('HyperPay.openSession', () => {
+  it('resolves a zero amount instead of rejecting it', async () => {
+    const hp = new HyperPay({
+      signer: { publicKey: USER_WALLET, signTransaction: async (tx) => tx },
       cluster: 'devnet',
-      visibility: 'private',
     })
+    const resolved = await hp.resolveAmount(0, 'USDC', { allowZero: true })
+    expect(resolved.units).toBe(0n)
+    expect(resolved.token.mint).toBe(DEVNET_USDC.toBase58())
+    await expect(hp.resolveAmount(0, 'USDC')).rejects.toThrow(/greater than zero/)
   })
 })

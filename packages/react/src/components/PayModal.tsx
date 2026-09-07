@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, type CSSProperties, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import type { PayOptions, Payment } from '@magicblock-labs/hyperpay-core/client'
+import type { Payment, SessionOptions } from '@magicblock-labs/hyperpay-core/client'
 import { usePay } from '../hooks.js'
 import { PaymentStatus } from './PaymentStatus.js'
 
@@ -52,7 +52,7 @@ export interface PayModalProps {
   open: boolean
   to: string
   amount: string | number | bigint
-  options?: PayOptions
+  options?: SessionOptions
   title?: ReactNode
   onClose: () => void
   onSettled?: (payment: Payment) => void
@@ -66,14 +66,14 @@ export function PayModal({
   to,
   amount,
   options,
-  title = 'Confirm payment',
+  title = 'Open session',
   onClose,
   onSettled,
   onError,
   className,
   style,
 }: PayModalProps) {
-  const { preview, pay, quote, status, error, payment, busy, reset } = usePay()
+  const { preview, openSession, quote, status, error, payment, busy, reset } = usePay()
   const dialogRef = useRef<HTMLDivElement | null>(null)
   const onErrorRef = useRef(onError)
   onErrorRef.current = onError
@@ -112,8 +112,8 @@ export function PayModal({
       >
         <h2>{title}</h2>
         <p>
-          {quote ? `${quote.amount} → ${quote.to}` : `Pay ${String(amount)} to ${to}`}
-          {quote ? ` · ${quote.visibility}, settles on ${quote.settlesOn}` : ''}
+          {quote ? `${quote.amount} → ${quote.to}` : `Open session ${String(amount)} with ${to}`}
+          {quote ? ` · settles on ${quote.settlesOn}` : ''}
         </p>
         <PaymentStatus status={status === 'quoting' ? 'idle' : status} payment={payment} error={error} />
         <div>
@@ -124,10 +124,10 @@ export function PayModal({
             type="button"
             disabled={busy || status === 'success'}
             onClick={() => {
-              void pay(to, amount, options).then(onSettled, onError)
+              void openSession(to, amount, options).then(onSettled, onError)
             }}
           >
-            {status === 'paying' ? 'Paying…' : 'Confirm'}
+            {status === 'paying' ? 'Opening…' : 'Confirm'}
           </button>
         </div>
       </div>

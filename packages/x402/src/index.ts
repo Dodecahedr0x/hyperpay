@@ -1,7 +1,5 @@
-import { Connection } from '@solana/web3.js'
-import { HyperPay, newRefId } from '@magicblock-labs/hyperpay-core/client'
+import { HyperPay } from '@magicblock-labs/hyperpay-core/client'
 import { formatAmount, HyperPayError, type Cluster, type TokenInfo } from '@magicblock-labs/hyperpay-types'
-import { baseRpcFor } from '@magicblock-labs/hyperpay-solana'
 
 export const PAYMENT_HEADER = 'x-payment'
 
@@ -24,20 +22,14 @@ export interface PaymentRequirement {
 /** What a client puts in the `X-Payment` header (base64 JSON). */
 export interface PaymentProof {
   refId: string
-  signature: string
-  from: string
+  /** User wallet that already opened a session with the merchant. */
+  user: string
   network: Cluster
 }
 
 export interface VerifyResult {
   ok: boolean
   reason?: string
-  /**
-   * `settled` — the recipient's balance provably increased by the required
-   * amount on the base layer.
-   * `accepted` — the transaction is confirmed and carries the expected refId,
-   * but the amount is not publicly observable because the transfer was private.
-   */
   strength?: 'settled' | 'accepted'
   proof?: PaymentProof
 }
@@ -91,9 +83,8 @@ export class MemoryChallengeStore implements ChallengeStore {
 }
 
 /**
- * The merchant half of HTTP 402: issues payment challenges and verifies proofs.
- *
- * Framework-agnostic on purpose — `expressPaywall` is a thin adapter over this.
+ * The merchant half of HTTP 402: issues payment challenges and verifies proofs
+ * by charging a session the user already opened with `openSession`.
  */
 export class Paywall {
   private readonly store: ChallengeStore
@@ -127,7 +118,10 @@ export class Paywall {
     return requirement
   }
 
-  /** Verifies an `X-Payment` header against a challenge this paywall issued. */
+  /**
+   * Verifies an `X-Payment` header, then merchant-`charge`s the user's session.
+   * The user must have `openSession` first.
+   */
   async verify(header: string | null | undefined): Promise<VerifyResult> {
     if (!header) return { ok: false, reason: 'Missing X-Payment header' }
 
@@ -137,8 +131,8 @@ export class Paywall {
     } catch {
       return { ok: false, reason: 'X-Payment header is not base64-encoded JSON' }
     }
-    if (!proof.refId || !proof.signature) {
-      return { ok: false, reason: 'Payment proof must carry refId and signature' }
+    if (!proof.refId || !proof.user) {
+      return { ok: false, reason: 'Payment proof must carry refId and user' }
     }
 
     const requirement = await this.store.take(proof.refId)
@@ -146,61 +140,24 @@ export class Paywall {
       return { ok: false, reason: 'Unknown, expired, or already-used payment reference' }
     }
 
-    const hp = this.options.hp
-    const rpcUrl = requirement.network === hp.cluster ? hp.rpcUrl : baseRpcFor(requirement.network)
-    const connection = new Connection(rpcUrl, 'confirmed')
-
-    const tx = await connection
-      .getTransaction(proof.signature, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 })
-      .catch(() => null)
-
-    if (!tx) {
-      return { ok: false, reason: 'Transaction not found on the base layer', proof }
-    }
-    if (tx.meta?.err) {
-      return { ok: false, reason: `Transaction failed on chain: ${JSON.stringify(tx.meta.err)}`, proof }
-    }
-
-    // Strong check: did the recipient's token balance actually go up enough?
-    const credited = tokenDelta(tx, requirement.to, requirement.mint)
-    if (credited >= BigInt(requirement.amount)) {
+    try {
+      await this.options.hp.charge(proof.user, requirement.display, { token: requirement.token.mint })
       return { ok: true, strength: 'settled', proof }
-    }
-
-    // Private transfers settle inside the rollup, so the base-layer transaction
-    // does not reveal the amount. We can confirm it happened, not how much it
-    // moved. Merchants needing certainty should poll their private balance.
-    return {
-      ok: true,
-      strength: 'accepted',
-      reason:
-        'Transaction confirmed but the amount is not publicly observable (private transfer). ' +
-        'Poll hp.balance() if you need settlement certainty.',
-      proof,
+    } catch (error) {
+      return {
+        ok: false,
+        reason: error instanceof Error ? error.message : String(error),
+        proof,
+      }
     }
   }
-}
-
-/** Net token-balance change for `owner` on `mint` within a confirmed transaction. */
-function tokenDelta(
-  tx: { meta?: { preTokenBalances?: unknown[] | null; postTokenBalances?: unknown[] | null } | null },
-  owner: string,
-  mint: string,
-): bigint {
-  type Entry = { owner?: string; mint?: string; uiTokenAmount?: { amount?: string } }
-  const sum = (list: unknown[] | null | undefined) =>
-    ((list ?? []) as Entry[])
-      .filter((b) => b.owner === owner && b.mint === mint)
-      .reduce((acc, b) => acc + BigInt(b.uiTokenAmount?.amount ?? '0'), 0n)
-
-  return sum(tx.meta?.postTokenBalances) - sum(tx.meta?.preTokenBalances)
 }
 
 /** Body of the 402 response. */
 export function challengeBody(requirement: PaymentRequirement) {
   return {
     error: 'payment_required',
-    message: `This resource costs ${requirement.display}.`,
+    message: `This resource costs ${requirement.display}. Open a session with the merchant first, then retry.`,
     accepts: [requirement],
   }
 }
@@ -232,27 +189,25 @@ export interface PayingFetchOptions {
   hp: HyperPay
   /** Refuse to pay more than this per request. Belt and braces over Policy. */
   maxPrice?: string
-  /** Called before paying. Return false to abort. */
+  /** Called before identifying the user to the merchant. Return false to abort. */
   approve?: (requirement: PaymentRequirement) => boolean | Promise<boolean>
-  visibility?: 'private' | 'public'
 }
 
 /**
- * The agent half of HTTP 402: a `fetch` that pays and retries automatically.
+ * The agent half of HTTP 402: a `fetch` that identifies the user so the
+ * merchant can `charge` a session the user already opened.
+ *
+ * Call `hp.openSession(merchant, amount)` before using this. There is no
+ * transfer-API fallback.
  *
  * ```ts
+ * await hp.openSession(merchant, '1 USDC')
  * const pay = payingFetch({ hp, maxPrice: '0.05 USDC' })
  * const res = await pay('https://api.example.com/data')
  * ```
- *
- * Private payments (the default) spend rollup USDC. If that balance is short,
- * `pay()` deposits the shortfall from the base layer first.
- *
- * Only one retry is attempted — if the server still says 402 after payment, the
- * 402 is returned rather than paying repeatedly into a broken endpoint.
  */
 export function payingFetch(options: PayingFetchOptions): typeof globalThis.fetch {
-  const { hp, maxPrice, approve, visibility = 'private' } = options
+  const { hp, maxPrice, approve } = options
 
   return async function fetchWithPayment(input: any, init?: RequestInit): Promise<Response> {
     const first = await fetch(input, init)
@@ -277,16 +232,14 @@ export function payingFetch(options: PayingFetchOptions): typeof globalThis.fetc
       throw new HyperPayError(`Payment of ${requirement.display} was declined`)
     }
 
-    const payment = await hp.pay(requirement.to, requirement.display, {
-      token: requirement.token.mint,
-      refId: requirement.refId,
-      visibility,
-    })
+    const user = hp.signer?.publicKey.toBase58()
+    if (!user) {
+      throw new HyperPayError('payingFetch needs a signer so the merchant can charge your session.')
+    }
 
     const proof: PaymentProof = {
       refId: requirement.refId,
-      signature: payment.signature,
-      from: hp.signer!.publicKey.toBase58(),
+      user,
       network: requirement.network,
     }
 
@@ -294,4 +247,11 @@ export function payingFetch(options: PayingFetchOptions): typeof globalThis.fetc
     headers.set(PAYMENT_HEADER, Buffer.from(JSON.stringify(proof)).toString('base64'))
     return fetch(input, { ...init, headers })
   } as typeof globalThis.fetch
+}
+
+function newRefId(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(8))
+  let v = 0n
+  for (const b of bytes) v = (v << 8n) | BigInt(b)
+  return v.toString()
 }

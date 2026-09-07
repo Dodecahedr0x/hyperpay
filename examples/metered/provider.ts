@@ -49,8 +49,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       token: token.symbol,
       decimals: token.decimals,
       cluster: hp.cluster,
-      visibility: 'private',
-      note: 'Pay this merchant with hp.pay(merchant, amount, { refId }), then POST /topup { signature, refId, units }.',
+      note: 'Open a session first: hp.openSession(merchant, amount). Then POST /topup { signature, refId, units }.',
     })
     return
   }

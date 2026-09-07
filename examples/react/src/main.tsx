@@ -31,7 +31,7 @@ function App() {
       <button type="button" onClick={() => (wallet.publicKey ? wallet.disconnect() : wallet.connect())}>
         {wallet.publicKey ? 'Disconnect' : 'Connect wallet'}
       </button>
-      <PayButton to="alice@magicblock.id" amount="10 USDC" onError={(error) => console.error(error)} />
+      <PayButton to="9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM" amount="10 USDC" onError={(error) => console.error(error)} />
     </HyperPayProvider>
   )
 }

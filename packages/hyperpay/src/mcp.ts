@@ -34,28 +34,23 @@ export function createMcpServer(hp: HyperPay = defaultClient()): McpServer {
   })
 
   server.registerTool(
-    'pay',
+    'open_session',
     {
-      title: 'Send a payment',
+      title: 'Open a payment session',
       description:
-        'Pay a Solana address or stealth handle (alice@magicblock.id). Private by default: ' +
-        'the transfer settles inside a MagicBlock ephemeral rollup rather than publicly on Solana. ' +
-        'Subject to the configured spend caps and recipient allow list.',
+        'Open a session with a merchant and optionally reserve an amount. Amount may be 0. ' +
+        'The user must open a session before a merchant can charge.',
       inputSchema: {
-        to: z.string().describe('Recipient pubkey or stealth handle'),
-        amount: z.string().describe('Amount, e.g. "10 USDC" or "2.5"'),
+        merchant: z.string().describe('Merchant pubkey'),
+        amount: z.string().optional().describe('Amount to reserve, e.g. "10 USDC". Omit or "0" for an empty session.'),
         token: z.string().optional().describe('Token symbol or mint; defaults to USDC'),
-        visibility: z.enum(['private', 'public']).optional(),
-        memo: z.string().optional(),
+        authority: z.string().optional().describe('Wallet that owns the User PDA, if the signer is a session key'),
       },
     },
-    async ({ to, amount, token, visibility, memo }) => {
+    async ({ merchant, amount, token, authority }) => {
       try {
-        const p = await hp.pay(to, amount, { token, visibility, memo })
-        return ok(
-          `Paid ${p.amount} to ${p.to} (${p.visibility}, settled on ${p.settledOn}). Signature: ${p.signature}`,
-          p as unknown as Record<string, unknown>,
-        )
+        const p = await hp.openSession(merchant, amount ?? 0, { token, authority })
+        return ok(`Opened session with ${p.to}. Signature: ${p.signature}`, p as unknown as Record<string, unknown>)
       } catch (e) {
         return fail(e)
       }
@@ -63,53 +58,22 @@ export function createMcpServer(hp: HyperPay = defaultClient()): McpServer {
   )
 
   server.registerTool(
-    'quote',
+    'charge',
     {
-      title: 'Price a payment without sending it',
+      title: 'Charge a payment session',
       description:
-        'Check what a payment would cost and whether the spend policy allows it. Sends nothing. ' +
-        'Use this before pay when the amount is uncertain.',
+        'Merchant debit of a user session. The user must have opened the session first. ' +
+        'Subject to the configured spend caps.',
       inputSchema: {
-        to: z.string(),
-        amount: z.string(),
+        user: z.string().describe('User wallet pubkey (User PDA authority)'),
+        amount: z.string().describe('Amount, e.g. "10 USDC" or "2.5"'),
         token: z.string().optional(),
-        visibility: z.enum(['private', 'public']).optional(),
       },
     },
-    async ({ to, amount, token, visibility }) => {
+    async ({ user, amount, token }) => {
       try {
-        const q = await hp.quote(to, amount, { token, visibility })
-        return ok(
-          `${q.amount} to ${q.to} would settle on ${q.settlesOn} (${q.visibility}). ` +
-            `Fees: ${q.fees ? `${q.fees.tokens} token base units, ${q.fees.lamports} lamports` : 'none'}.`,
-          q as unknown as Record<string, unknown>,
-        )
-      } catch (e) {
-        return fail(e)
-      }
-    },
-  )
-
-  server.registerTool(
-    'balance',
-    {
-      title: 'Read balances',
-      description:
-        'Base-layer and private (ephemeral rollup) balance for a token. ' +
-        'Omit address to read your own wallet.',
-      inputSchema: {
-        token: z.string().optional(),
-        address: z.string().optional(),
-      },
-    },
-    async ({ token, address }) => {
-      try {
-        const b = await hp.balance({ token, address })
-        return ok(
-          `${b.address}: ${b.base} ${b.token.symbol} on base, ` +
-            `${b.private ?? 'unknown'} ${b.token.symbol} private.`,
-          b as unknown as Record<string, unknown>,
-        )
+        const p = await hp.charge(user, amount, { token })
+        return ok(`Charged ${p.amount}. Signature: ${p.signature}`, p as unknown as Record<string, unknown>)
       } catch (e) {
         return fail(e)
       }
@@ -119,14 +83,18 @@ export function createMcpServer(hp: HyperPay = defaultClient()): McpServer {
   server.registerTool(
     'deposit',
     {
-      title: 'Fund the private balance',
-      description:
-        'Move tokens from the Solana base layer into the ephemeral rollup, where private transfers spend from.',
-      inputSchema: { amount: z.string(), token: z.string().optional() },
+      title: 'Reserve more into a session',
+      description: 'Increase remaining on an existing session against the user eATA.',
+      inputSchema: {
+        merchant: z.string(),
+        amount: z.string(),
+        token: z.string().optional(),
+        authority: z.string().optional(),
+      },
     },
-    async ({ amount, token }) => {
+    async ({ merchant, amount, token, authority }) => {
       try {
-        const p = await hp.deposit(amount, { token })
+        const p = await hp.deposit(merchant, amount, { token, authority })
         return ok(`Deposited ${p.amount}. Signature: ${p.signature}`, p as unknown as Record<string, unknown>)
       } catch (e) {
         return fail(e)
@@ -137,14 +105,56 @@ export function createMcpServer(hp: HyperPay = defaultClient()): McpServer {
   server.registerTool(
     'withdraw',
     {
-      title: 'Move funds back to the base layer',
-      description: 'Withdraw tokens from the ephemeral rollup to the Solana base layer.',
-      inputSchema: { amount: z.string(), token: z.string().optional() },
+      title: 'Withdraw unreserved tokens',
+      description: 'Move unreserved eATA tokens to a destination eATA. Does not touch session remaining.',
+      inputSchema: {
+        amount: z.string(),
+        token: z.string().optional(),
+        destination: z.string().optional(),
+        authority: z.string().optional(),
+      },
     },
-    async ({ amount, token }) => {
+    async ({ amount, token, destination, authority }) => {
       try {
-        const p = await hp.withdraw(amount, { token })
+        const p = await hp.withdraw(amount, { token, destination, authority })
         return ok(`Withdrew ${p.amount}. Signature: ${p.signature}`, p as unknown as Record<string, unknown>)
+      } catch (e) {
+        return fail(e)
+      }
+    },
+  )
+
+  server.registerTool(
+    'session_balance',
+    {
+      title: 'Read session remaining',
+      description: 'Remaining units on the ER session between `user` and this merchant.',
+      inputSchema: { user: z.string() },
+    },
+    async ({ user }) => {
+      try {
+        const b = await hp.sessionBalance(user)
+        return ok(`${b.address}: ${b.base} ${b.token.symbol} remaining.`, b as unknown as Record<string, unknown>)
+      } catch (e) {
+        return fail(e)
+      }
+    },
+  )
+
+  server.registerTool(
+    'balance',
+    {
+      title: 'Read ATA balance',
+      description: 'Base-layer token account balance. Omit address to read your own wallet.',
+      inputSchema: {
+        token: z.string().optional(),
+        address: z.string().optional(),
+      },
+    },
+    async ({ token, address }) => {
+      try {
+        const b = await hp.balance({ token, address })
+        return ok(`${b.address}: ${b.base} ${b.token.symbol}.`, b as unknown as Record<string, unknown>)
       } catch (e) {
         return fail(e)
       }
@@ -190,7 +200,7 @@ async function spentSummary(hp: HyperPay): Promise<string> {
     const symbol = entry.trim().split(/\s+/)[1]
     if (!symbol) continue
     try {
-      const token = await hp.resolveAmount('0', symbol).then((r) => r.token)
+      const token = await hp.resolveAmount('0', symbol, { allowZero: true }).then((r) => r.token)
       parts.push(formatAmount(hp.policy.spentToday(token.symbol), token))
     } catch {
       // An unresolvable cap symbol is a config problem, not a reason to fail the tool.
@@ -208,7 +218,6 @@ export async function runMcpServer(hp?: HyperPay): Promise<void> {
   await server.connect(new StdioServerTransport())
 }
 
-// `hyperpay mcp` and `node dist/mcp.js` both land here.
 if (process.argv[1] && /(?:^|[\\/])mcp\.[jt]s$/.test(process.argv[1])) {
   runMcpServer().catch((e) => {
     console.error(e instanceof Error ? e.message : String(e))

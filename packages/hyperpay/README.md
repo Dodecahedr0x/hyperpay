@@ -8,10 +8,10 @@ Prefer a focused package when you want the smallest possible graph. `./react` is
 import { HyperPay } from '@magicblock-labs/hyperpay'
 import { payingFetch } from '@magicblock-labs/hyperpay/x402'
 import { PayButton } from '@magicblock-labs/hyperpay-react'
-import { PaymentsApi, memoryJournal, fileJournal } from '@magicblock-labs/hyperpay/core'
+import { memoryJournal, fileJournal } from '@magicblock-labs/hyperpay/core'
 ```
 
-`PaymentsApi`, `memoryJournal`, and `fileJournal` are not on the umbrella root. `fromEnv()` and `{ key }` are Node-only; in the browser pass `{ signer }` or `{ wallet }`.
+`memoryJournal` and `fileJournal` are not on the umbrella root. `fromEnv()` and `{ key }` are Node-only; in the browser pass `{ signer }` or `{ wallet }`.
 
 ## Publishing
 

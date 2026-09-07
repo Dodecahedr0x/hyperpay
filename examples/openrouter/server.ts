@@ -54,9 +54,8 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       token: usdc.symbol,
       decimals: usdc.decimals,
       cluster: hp.cluster,
-      visibility: 'private',
       note:
-        'Pay this merchant from your ephemeral USDC with hp.pay(merchant, amount, { refId }), then POST /topup. A completion is refused with 402 until credit covers a worst-case hold; OpenRouter is not called first.',
+        'Open a session with this merchant first: hp.openSession(merchant, amount). Then POST /topup. A completion is refused with 402 until credit covers a worst-case hold; OpenRouter is not called first.',
     })
     return
   }
