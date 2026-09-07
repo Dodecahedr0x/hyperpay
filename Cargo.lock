@@ -2132,7 +2132,7 @@ dependencies = [
 
 [[package]]
 name = "hyperpay"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "bincode",
@@ -2147,7 +2147,7 @@ dependencies = [
 
 [[package]]
 name = "hyperpay-program"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "anchor-lang",
  "anchor-spl",
