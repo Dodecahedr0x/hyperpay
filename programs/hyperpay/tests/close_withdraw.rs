@@ -184,6 +184,49 @@ struct SessionFixture {
     destination: Address,
 }
 
+fn fixture_withdraw_no_user_mint(svm: &mut LiteSVM, wallet: Keypair) -> SessionFixture {
+    let (user, user_bump) = user_pda(wallet.pubkey());
+    let mint = Keypair::new().pubkey();
+    let merchant_kp = Keypair::new();
+    let merchant = merchant_kp.pubkey();
+    let (user_mint, _) = user_mint_pda(user, mint);
+    let (session, _) = session_pda(user, merchant, mint);
+    let user_eata = Keypair::new().pubkey();
+    let destination = Keypair::new().pubkey();
+
+    write_account(
+        svm,
+        user,
+        program_id(),
+        serialize_user(wallet.pubkey(), user_bump),
+    );
+    write_account(svm, mint, Address::default(), vec![0u8; 82]);
+    write_account(
+        svm,
+        user_eata,
+        token_program_id(),
+        pack_token_account(mint, user, EATA_BALANCE),
+    );
+    write_account(
+        svm,
+        destination,
+        token_program_id(),
+        pack_token_account(mint, wallet.pubkey(), 0),
+    );
+
+    SessionFixture {
+        wallet,
+        merchant_kp,
+        user,
+        user_mint,
+        session,
+        merchant,
+        mint,
+        user_eata,
+        destination,
+    }
+}
+
 fn fixture_session(
     svm: &mut LiteSVM,
     wallet: Keypair,
@@ -412,6 +455,22 @@ fn withdraw_does_not_change_remaining() {
 
     let session = svm.get_account(&fx.session).expect("Session");
     assert_eq!(read_u64(&session.data, 104), 30, "remaining unchanged");
+}
+
+#[test]
+fn withdraw_without_user_mint_treats_reserved_as_zero() {
+    let (mut svm, wallet) = setup();
+    let fx = fixture_withdraw_no_user_mint(&mut svm, wallet);
+
+    send_ix(
+        &mut svm,
+        &fx.wallet,
+        withdraw_ix(&fx, fx.wallet.pubkey(), 40),
+    )
+    .expect("withdraw(40) with no UserMint");
+
+    assert_eq!(token_amount(&svm, &fx.user_eata), 60, "user eATA");
+    assert_eq!(token_amount(&svm, &fx.destination), 40, "destination");
 }
 
 #[test]

@@ -219,10 +219,16 @@ pub mod hyperpay {
 
     pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
         require!(amount > 0, HyperpayError::AmountZero);
-        let available = crate::accounting::available(
-            ctx.accounts.user_eata.amount,
-            ctx.accounts.user_mint.reserved,
-        );
+        let reserved = if is_uninitialized(&ctx.accounts.user_mint.to_account_info())? {
+            0
+        } else {
+            let user_mint =
+                load_program_account::<UserMint>(&ctx.accounts.user_mint.to_account_info())?;
+            require_keys_eq!(user_mint.user, ctx.accounts.user.key());
+            require_keys_eq!(user_mint.mint, ctx.accounts.mint.key());
+            user_mint.reserved
+        };
+        let available = crate::accounting::available(ctx.accounts.user_eata.amount, reserved);
         require!(amount <= available, HyperpayError::InsufficientAvailable);
 
         let bump = [ctx.accounts.user.bump];
@@ -441,13 +447,12 @@ pub struct Withdraw<'info> {
     pub user: Account<'info, User>,
     #[account(constraint = signer.key() == user.authority @ HyperpayError::Unauthorized)]
     pub signer: Signer<'info>,
+    /// CHECK: optional; missing or uninitialized UserMint means reserved = 0.
     #[account(
         seeds = [USER_MINT_SEED, user.key().as_ref(), mint.key().as_ref()],
-        bump = user_mint.bump,
-        constraint = user_mint.user == user.key(),
-        constraint = user_mint.mint == mint.key()
+        bump
     )]
-    pub user_mint: Account<'info, UserMint>,
+    pub user_mint: UncheckedAccount<'info>,
     /// CHECK: mint is pinned by PDA seeds and the eATA token::mint constraints.
     pub mint: UncheckedAccount<'info>,
     #[account(
