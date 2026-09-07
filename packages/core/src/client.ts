@@ -25,9 +25,14 @@ import { envSigner, loadKey } from './runtime.js'
 import {
   chargeIx,
   closeSessionIx,
+  delegateEphemeralAtaIx,
+  delegateUserIx,
+  delegationRecordPda,
   depositIx,
-  eataPda,
-  fundUserIx,
+  depositSplIx,
+  ensureUserMintIx,
+  initEphemeralAtaIx,
+  initGlobalVaultIx,
   initUserIx,
   openSessionIx,
   remainingFromSessionData,
@@ -35,6 +40,8 @@ import {
   userMintPda,
   userPda,
   withdrawIx,
+  LOCAL_ER_VALIDATOR,
+  eataPda,
   type SessionAccounts,
 } from './program.js'
 
@@ -43,16 +50,27 @@ export {
   SESSION_REMAINING_OFFSET,
   chargeIx,
   closeSessionIx,
+  delegateBufferPda,
+  delegateEphemeralAtaIx,
+  delegateUserIx,
+  delegationMetadataPda,
+  delegationRecordPda,
   depositIx,
+  depositSplIx,
   eataPda,
-  fundUserIx,
+  ensureUserMintIx,
+  initEphemeralAtaIx,
+  initGlobalVaultIx,
   initUserIx,
   openSessionIx,
   remainingFromSessionData,
   sessionPda,
   userMintPda,
   userPda,
+  vaultPda,
   withdrawIx,
+  DELEGATION_PROGRAM_ID,
+  LOCAL_ER_VALIDATOR,
 } from './program.js'
 export type { SessionAccounts, WithdrawAccounts } from './program.js'
 
@@ -119,6 +137,7 @@ export interface Balances {
  * ```ts
  * const user = HyperPay.fromEnv()
  * await user.initUser(1_000_000n)
+ * await user.topUp('10 USDC')
  * await user.openSession(merchant, '10 USDC')
  *
  * const merchantHp = new HyperPay({ key: merchantKey, cluster: 'devnet' })
@@ -189,7 +208,7 @@ export class HyperPay {
     const [user] = userPda(args.authority)
     const [userMint] = userMintPda(user, args.mint)
     const [session] = sessionPda(user, args.merchant, args.mint)
-    const [userEata] = eataPda(user, args.mint)
+    const userEata = associatedTokenAddress(args.mint, user)
     return {
       user,
       signer: this.requireSigner().publicKey,
@@ -217,20 +236,74 @@ export class HyperPay {
     )
   }
 
-  /** Tops up the User PDA with lamports. Wallet or a user session token. */
-  async fundUser(lamports: bigint | number, opts: SessionOptions = {}): Promise<Payment> {
-    const units = BigInt(lamports)
-    if (units <= 0n) throw new HyperPayError('Payment amount must be greater than zero')
-    const signer = this.requireSigner().publicKey
-    const [user] = userPda(this.walletAuthority(opts))
+  /** Delegates the User PDA to the ephemeral rollup (MagicBlock CPI on base). */
+  async delegateUser(opts: { validator?: string } = {}): Promise<Payment> {
+    const authority = this.requireSigner().publicKey
+    const [user] = userPda(authority)
+    const validator = opts.validator ? new PublicKey(opts.validator) : LOCAL_ER_VALIDATOR
     return this.submit(
-      fundUserIx(user, signer, units, optionalPubkey(opts.sessionToken)),
+      delegateUserIx(user, authority, validator),
       this.rpcUrl,
       'base',
-      signer.toBase58(),
-      units,
+      user.toBase58(),
+      0n,
       lamportToken(),
     )
+  }
+
+  /**
+   * Deposits tokens from the signer's Tokenkeg ATA into the User eATA (base),
+   * then creates the ephemeral UserMint if it is missing. `reserved` stays 0
+   * until `openSession` / `deposit`. Requires `initUser` + `delegateUser`.
+   */
+  async topUp(amount: string | number | bigint, opts: SessionOptions = {}): Promise<Payment> {
+    const { token, units } = await this.resolveAmount(amount, opts.token)
+    const authority = this.walletAuthority(opts)
+    this.policy.check({ to: authority.toBase58(), token, units })
+    const signer = this.requireSigner().publicKey
+    const mint = new PublicKey(token.mint)
+    const [user] = userPda(authority)
+    const [userMint] = userMintPda(user, mint)
+    const [eata] = eataPda(user, mint)
+    const skipPreflight = { skipPreflight: true as const }
+    await this.submit(
+      [initGlobalVaultIx(signer, mint), initEphemeralAtaIx(signer, user, mint)],
+      this.rpcUrl,
+      'base',
+      authority.toBase58(),
+      0n,
+      token,
+      skipPreflight,
+    )
+    const payment = await this.submit(
+      depositSplIx(signer, user, mint, units),
+      this.rpcUrl,
+      'base',
+      authority.toBase58(),
+      units,
+      token,
+      skipPreflight,
+    )
+    if (!(await getAccountData(this.rpcUrl, delegationRecordPda(eata)))) {
+      await this.submit(
+        delegateEphemeralAtaIx(signer, user, mint),
+        this.rpcUrl,
+        'base',
+        authority.toBase58(),
+        0n,
+        token,
+        skipPreflight,
+      )
+    }
+    await this.submit(
+      ensureUserMintIx(user, signer, userMint, mint, optionalPubkey(opts.sessionToken)),
+      this.ephemeralRpcUrl,
+      'ephemeral',
+      authority.toBase58(),
+      0n,
+      token,
+    )
+    return payment
   }
 
   /** Opens a session with `merchant`. Amount may be 0. */
@@ -295,7 +368,7 @@ export class HyperPay {
       merchant,
       mint,
     })
-    const [merchantEata] = eataPda(merchant, mint)
+    const merchantEata = associatedTokenAddress(mint, merchant)
     return this.submit(
       chargeIx(accounts, merchantEata, units),
       this.ephemeralRpcUrl,
@@ -336,8 +409,8 @@ export class HyperPay {
     const mint = new PublicKey(token.mint)
     const [user] = userPda(this.walletAuthority(opts))
     const [userMint] = userMintPda(user, mint)
-    const [userEata] = eataPda(user, mint)
-    const [destination] = eataPda(destOwner, mint)
+    const userEata = associatedTokenAddress(mint, user)
+    const destination = associatedTokenAddress(mint, destOwner)
     return this.submit(
       withdrawIx(
         { user, signer, userMint, mint, userEata, destination },
@@ -418,14 +491,15 @@ export class HyperPay {
   }
 
   private async submit(
-    ix: TransactionInstruction,
+    ix: TransactionInstruction | TransactionInstruction[],
     rpcUrl: string,
     settledOn: 'base' | 'ephemeral',
     to: string,
     units: bigint,
     token: TokenInfo,
+    opts?: { skipPreflight?: boolean },
   ): Promise<Payment> {
-    const result = await signAndSubmit(ix, this.requireSigner(), rpcUrl, settledOn)
+    const result = await signAndSubmit(ix, this.requireSigner(), rpcUrl, settledOn, opts)
     if (units > 0n) this.policy.record({ to, token, units })
     return this.receipt(to, token, units, result)
   }

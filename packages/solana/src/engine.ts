@@ -74,14 +74,15 @@ export async function getAccountData(
 }
 
 /**
- * Builds a transaction around one instruction, signs it, submits it, and waits
- * for confirmation.
+ * Builds a transaction around one or more instructions, signs it, submits it,
+ * and waits for confirmation.
  */
 export async function signAndSubmit(
-  ix: TransactionInstruction,
+  ix: TransactionInstruction | TransactionInstruction[],
   signer: HyperPaySigner,
   rpcUrl: string,
   settledOn: 'base' | 'ephemeral',
+  opts?: { skipPreflight?: boolean },
 ): Promise<SubmitResult> {
   const connection = new Connection(rpcUrl, 'confirmed')
   const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed')
@@ -89,10 +90,14 @@ export async function signAndSubmit(
     feePayer: signer.publicKey,
     blockhash,
     lastValidBlockHeight,
-  }).add(ix)
+  }).add(...(Array.isArray(ix) ? ix : [ix]))
   const signed = await signer.signTransaction(tx)
+  // Local and hosted ERs reject many writable accounts during preflight
+  // (JIT clone is read-only until the real tx runs). MagicBlock's own
+  // tests send rollup txs with skipPreflight: true. eSPL init/deposit on
+  // a local base validator has the same simulation gap.
   const signature = await connection.sendRawTransaction(signed.serialize(), {
-    skipPreflight: false,
+    skipPreflight: opts?.skipPreflight ?? settledOn === 'ephemeral',
     maxRetries: 3,
   })
   await confirmSignature(connection, signature, lastValidBlockHeight)
@@ -120,8 +125,12 @@ export async function confirmSignature(
     const status = value[0]
 
     if (status?.err) {
+      const tx = await connection
+        .getParsedTransaction(signature, { maxSupportedTransactionVersion: 0 })
+        .catch(() => null)
+      const logs = tx?.meta?.logMessages?.join('\n') ?? ''
       throw new ConfirmationError(
-        `Transaction ${signature} failed on chain: ${JSON.stringify(status.err)}`,
+        `Transaction ${signature} failed on chain: ${JSON.stringify(status.err)}${logs ? `\n${logs}` : ''}`,
         signature,
       )
     }

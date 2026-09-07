@@ -6,10 +6,18 @@ import {
   PROGRAM_ID,
   SESSION_REMAINING_OFFSET,
   chargeIx,
+  delegateBufferPda,
+  delegateUserIx,
+  delegationMetadataPda,
+  delegationRecordPda,
+  ensureUserMintIx,
+  depositSplIx,
   openSessionIx,
   sessionPda,
   userMintPda,
   userPda,
+  DELEGATION_PROGRAM_ID,
+  LOCAL_ER_VALIDATOR,
 } from '@magicblock-labs/hyperpay-core'
 import { PolicyError } from '@magicblock-labs/hyperpay-types'
 import type { HyperPaySigner } from '@magicblock-labs/hyperpay-solana'
@@ -107,6 +115,48 @@ describe('instruction builders', () => {
     expect(ix.keys[1]!.isSigner).toBe(true)
   })
 
+  it('delegateUserIx CPI accounts target the local ER validator', () => {
+    const [user] = userPda(USER_WALLET)
+    const ix = delegateUserIx(user, USER_WALLET, LOCAL_ER_VALIDATOR)
+    expect(ix.programId.equals(PROGRAM_ID)).toBe(true)
+    expect(Buffer.from(ix.data)).toEqual(Buffer.from(sighash('delegate_user')))
+    expect(ix.keys[0]!.pubkey.equals(USER_WALLET)).toBe(true)
+    expect(ix.keys[0]!.isSigner).toBe(true)
+    expect(ix.keys[1]!.pubkey.equals(delegateBufferPda(user))).toBe(true)
+    expect(ix.keys[2]!.pubkey.equals(delegationRecordPda(user))).toBe(true)
+    expect(ix.keys[3]!.pubkey.equals(delegationMetadataPda(user))).toBe(true)
+    expect(ix.keys[4]!.pubkey.equals(user)).toBe(true)
+    expect(ix.keys[5]!.pubkey.equals(PROGRAM_ID)).toBe(true)
+    expect(ix.keys[6]!.pubkey.equals(DELEGATION_PROGRAM_ID)).toBe(true)
+    expect(ix.keys.at(-1)!.pubkey.equals(LOCAL_ER_VALIDATOR)).toBe(true)
+  })
+
+  it('ensureUserMintIx creates the ephemeral UserMint with vault + magic program', () => {
+    const [user] = userPda(USER_WALLET)
+    const [userMint] = userMintPda(user, DEVNET_USDC)
+    const ix = ensureUserMintIx(user, USER_WALLET, userMint, DEVNET_USDC)
+    expect(Buffer.from(ix.data)).toEqual(Buffer.from(sighash('ensure_user_mint')))
+    expect(ix.keys[0]!.pubkey.equals(user)).toBe(true)
+    expect(ix.keys[0]!.isWritable).toBe(true)
+    expect(ix.keys[1]!.pubkey.equals(USER_WALLET)).toBe(true)
+    expect(ix.keys[1]!.isSigner).toBe(true)
+    expect(ix.keys[2]!.pubkey.equals(userMint)).toBe(true)
+    expect(ix.keys[2]!.isWritable).toBe(true)
+    expect(ix.keys[3]!.pubkey.equals(DEVNET_USDC)).toBe(true)
+    expect(ix.keys[4]!.pubkey.equals(PROGRAM_ID)).toBe(true)
+    expect(ix.keys[5]!.pubkey.toBase58()).toBe('MagicVau1t999999999999999999999999999999999')
+    expect(ix.keys[5]!.isWritable).toBe(true)
+    expect(ix.keys[6]!.pubkey.toBase58()).toBe('Magic11111111111111111111111111111111111111')
+  })
+
+  it('depositSplIx credits the User eATA from the wallet ATA', () => {
+    const [user] = userPda(USER_WALLET)
+    const ix = depositSplIx(USER_WALLET, user, DEVNET_USDC, 1_000_000n)
+    expect(ix.programId.toBase58()).toBe('SPLxh1LVZzEkX99H6rqYizhytLWPZVV296zyYDPagv2')
+    expect(ix.data[0]).toBe(2)
+    expect(ix.keys[5]!.pubkey.equals(USER_WALLET)).toBe(true)
+    expect(ix.keys[5]!.isSigner).toBe(true)
+  })
   it('openSessionIx allows amount 0', () => {
     const [user] = userPda(USER_WALLET)
     const ix = openSessionIx(
@@ -141,6 +191,12 @@ describe('instruction builders', () => {
     expect(accounts.user.equals(fromWallet)).toBe(true)
     expect(accounts.user.equals(fromSessionKey)).toBe(false)
     expect(accounts.signer.equals(SESSION_KEY)).toBe(true)
+    expect(accounts.userEata.toBase58()).toBe(
+      PublicKey.findProgramAddressSync(
+        [fromWallet.toBuffer(), new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA').toBuffer(), DEVNET_USDC.toBuffer()],
+        new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL'),
+      )[0].toBase58(),
+    )
   })
 })
 
@@ -148,6 +204,24 @@ describe('HyperPay.charge', () => {
   const originalFetch = globalThis.fetch
   afterEach(() => {
     globalThis.fetch = originalFetch
+  })
+
+  it('topUp checks policy against the user wallet before it signs', async () => {
+    const fetch = async () => {
+      throw new Error('policy must run before any RPC')
+    }
+    globalThis.fetch = fetch as typeof globalThis.fetch
+
+    const hp = new HyperPay({
+      signer: {
+        publicKey: USER_WALLET,
+        signTransaction: async (tx) => tx,
+      },
+      cluster: 'devnet',
+      policy: { deny: [USER_WALLET.toBase58()] },
+    })
+
+    await expect(hp.topUp('1 USDC')).rejects.toBeInstanceOf(PolicyError)
   })
 
   it('checks policy against the merchant before it signs', async () => {

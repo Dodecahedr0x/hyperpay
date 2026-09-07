@@ -21,7 +21,8 @@
     "test": "vitest run test/unit packages/react/test examples/openrouter",
     "test:dist": "vitest run --config vitest.dist.config.ts",
     "test:live": "vitest run test/live --testTimeout=120000",
-    "test:e2e": "vitest run test/e2e examples/openrouter --testTimeout=300000",
+    "test:e2e": "vitest run test/e2e/payment.e2e.test.ts test/e2e/x402.e2e.test.ts examples/openrouter --testTimeout=300000",
+    "test:e2e:local": "vitest run test/e2e/mb-stack.e2e.test.ts --testTimeout=300000",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "publish:packages": "npm publish -ws --access public"
   },

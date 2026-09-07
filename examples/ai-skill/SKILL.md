@@ -12,7 +12,7 @@ description: >-
 HyperPay (`@magicblock-labs/hyperpay`) builds, signs, and submits the hyperpay
 program (`Adyo1eYuP8deoLxwgkvaomUYvAUKUGryh4RGpdTR9YhU`). You sign locally.
 
-Typical flow: `initUser` → `fundUser` → (eSPL top-up outside HyperPay) →
+Typical flow: `initUser` → `delegateUser` → `topUp` →
 `openSession(merchant, amount)` → merchant `charge` → `closeSession` → `withdraw`.
 
 **Always quote, then open or charge.** Never invent methods (`pay`, `waitForCredit`,
@@ -66,17 +66,16 @@ export HYPERPAY_DENY=""                    # checked first; wins over allow
 - Daily spend journals to `HYPERPAY_JOURNAL` (default `~/.hyperpay/spend.json`) and survives restarts.
 - When the signer is a session key, pass `authority` (the wallet that owns the User PDA).
 
-## 3. Init, fund, open a session
+## 3. Init, open a session
 
-`initUser` / `fundUser` put lamports in the User PDA on the base cluster. Token
-balance lives in the User eATA (eSPL top-up is outside HyperPay). `openSession`
-reserves that eATA against a merchant.
+`initUser` puts lamports in the User PDA on the base cluster. Extra lamports are
+a system transfer or eSPL-sponsored. Token balance lives in the User eATA
+(`topUp`). `openSession` reserves that eATA against a merchant.
 
 ```sh
 npx @magicblock-labs/hyperpay address
 npx @magicblock-labs/hyperpay balance
 npx @magicblock-labs/hyperpay init-user 1000000
-npx @magicblock-labs/hyperpay fund-user 500000
 npx @magicblock-labs/hyperpay open-session <merchant> "10 USDC"
 ```
 
@@ -84,7 +83,6 @@ SDK equivalent:
 
 ```ts
 await hp.initUser(1_000_000n)
-await hp.fundUser(500_000n)
 await hp.openSession(merchant, '10 USDC')
 await hp.withdraw('5 USDC')
 ```

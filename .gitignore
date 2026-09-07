@@ -10,3 +10,5 @@ target/
 .DS_Store
 .hyperpay/
 test/.artifacts/
+magicblock-test-storage/
+test-ledger/

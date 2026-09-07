@@ -42,6 +42,10 @@ test-live:
 test-e2e:
     npm run test:e2e
 
+# Local MagicBlock stack (spins up mb-stack, deploys hyperpay, hits TS + Rust SDKs)
+test-e2e-local:
+    npm run test:e2e:local
+
 # rustfmt (write)
 fmt:
     cargo fmt --all

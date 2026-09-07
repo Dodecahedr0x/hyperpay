@@ -8,7 +8,8 @@ hyperpay — payment sessions on Solana.
 
 USAGE
   hyperpay init-user <lamports>              Create the User PDA
-  hyperpay fund-user <lamports>              Top up User lamports
+  hyperpay delegate-user                     Delegate the User PDA to the ER
+  hyperpay top-up <amount>                   Deposit wallet ATA tokens into the User eATA
   hyperpay open-session <merchant> [amount]  Open a session (amount may be 0)
   hyperpay deposit <merchant> <amount>       Reserve more into a session
   hyperpay charge <user> <amount>            Merchant debit of a session
@@ -118,10 +119,16 @@ async function main(argv: string[]): Promise<number> {
       return 0
     }
 
-    case 'fund-user': {
-      const [lamports] = requireArgs(rest, 1, 'fund-user <lamports>')
-      const p = await hp.fundUser(BigInt(lamports!), sessionOpts)
-      out(`Funded user\n  signature ${p.signature}`, p)
+    case 'delegate-user': {
+      const p = await hp.delegateUser()
+      out(`Delegated user\n  signature ${p.signature}`, p)
+      return 0
+    }
+
+    case 'top-up': {
+      const amount = requireArgs(rest, 1, 'top-up <amount>').join(' ')
+      const p = await hp.topUp(amount, sessionOpts)
+      out(`Topped up ${p.amount}\n  signature ${p.signature}`, p)
       return 0
     }
 
