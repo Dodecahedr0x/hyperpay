@@ -342,13 +342,13 @@ never holds your keys; you sign everything locally.
 
 ## Publishing
 
-Bump every `packages/*/package.json` version together, then:
+Bump every `packages/*/package.json` version together (and the crate — `just version-align`). Tag a GitHub Release `vX.Y.Z` matching that version. CI then publishes the public npm workspaces and the crate.
 
-```sh
-npm run build && npm run typecheck && npm test && npm run publish:packages
-```
+On npmjs.com, add a GitHub Actions trusted publisher for each `@magicblock-labs/hyperpay*` package: org `magicblock-labs`, repo `hyperpay`, workflow filename `npm-release.yml`, and allow `npm publish` (not only staged publish). The crate job uses `CARGO_REGISTRY_TOKEN`.
 
 Internal deps use `*` (this npm has no `workspace:` protocol) so lockstep publishes do not 404. Publish the workspace together — a single package at a new version will 404 its siblings.
+
+PRs titled `release: vX.Y.Z` dry-run both publishes. Locally: `just publish-dry`.
 
 ## License
 

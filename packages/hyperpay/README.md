@@ -17,4 +17,4 @@ Canonical surface: [`docs/reference.md`](../../docs/reference.md). Agent map: [`
 
 ## Publishing
 
-Bump every `packages/*/package.json` version together, then `npm run build && npm run typecheck && npm test && npm run publish:packages`. Internal deps use `*` (npm workspaces have no `workspace:` protocol) so lockstep publishes do not 404. Do not publish one package without the others.
+Bump every `packages/*/package.json` version together, then tag a GitHub Release `vX.Y.Z` matching that version. CI publishes the public npm workspaces and the crate. Internal deps use `*` (npm workspaces have no `workspace:` protocol) so lockstep publishes do not 404. Do not publish one package without the others.

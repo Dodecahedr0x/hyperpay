@@ -1,0 +1,29 @@
+name: npm release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  npm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: extractions/setup-just@v4
+      - name: Check versions match
+        run: just version-check "${{ github.event.release.tag_name }}"
+
+      # Node 24 ships npm 11.5.1+, required for trusted publishing (OIDC).
+      # Do not set registry-url: setup-node would write an empty _authToken
+      # and the CLI would skip the OIDC exchange.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - run: npm ci
+      - name: Publish to npm
+        run: just publish-npm

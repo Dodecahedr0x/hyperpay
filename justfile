@@ -96,13 +96,12 @@ publish-dry-crate:
 # example workspace has no version and crashes `npm publish -ws`.
 publish-dry-npm:
     npm run build
-    npm publish --access public --dry-run \
-      -w @magicblock-labs/hyperpay-types \
-      -w @magicblock-labs/hyperpay-solana \
-      -w @magicblock-labs/hyperpay-core \
-      -w @magicblock-labs/hyperpay-x402 \
-      -w @magicblock-labs/hyperpay-react \
-      -w @magicblock-labs/hyperpay
+    npm run publish:packages -- --dry-run
+
+# Publish public npm workspaces (used by .github/workflows/npm-release.yml)
+publish-npm:
+    npm run build
+    npm run publish:packages
 
 # Check versions, then dry-run crate and npm publish. Optional tag or "release: vX.Y.Z" title.
 publish-dry tag="":

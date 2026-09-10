@@ -26,7 +26,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "docs": "node scripts/docs.mjs write",
     "docs:check": "node scripts/docs.mjs check",
-    "publish:packages": "npm publish -ws --access public"
+    "publish:packages": "npm publish --access public -w @magicblock-labs/hyperpay-types -w @magicblock-labs/hyperpay-solana -w @magicblock-labs/hyperpay-core -w @magicblock-labs/hyperpay-x402 -w @magicblock-labs/hyperpay-react -w @magicblock-labs/hyperpay"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
